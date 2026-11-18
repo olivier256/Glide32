@@ -1,2 +1,3 @@
-- 002 [ ]	SMP
+- 003 [ ]	Synchronisation via CommPort
+- 002 [x]	SMP
 - 001 [x]	Changer le FB pour Line Table Init

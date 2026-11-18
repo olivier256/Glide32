@@ -2,9 +2,24 @@
 #include "vdp.h"
 
 #include <MiniFB.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+
+static struct timespec _vblank_start;
+
+double platform_vblank_elapsed_ms(void) {
+  struct timespec now;
+
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  return (now.tv_sec - _vblank_start.tv_sec) * 1000.0 +
+         (now.tv_nsec - _vblank_start.tv_nsec) / 1000000.0;
+}
+
+static pthread_t _slave_thread;
+static void (*_slave_main)(void);
 
 static struct mfb_window *_window = NULL;
 
@@ -12,6 +27,22 @@ static uint32_t *_display = NULL;
 
 static int _width = 0;
 static int _height = 0;
+
+static void *_slave_trampoline(void *arg) {
+  (void)arg;
+  _slave_main();
+  return NULL;
+}
+
+int platform_start_slave(void (*slave_main)(void)) {
+  _slave_main = slave_main;
+  return pthread_create(&_slave_thread, NULL, _slave_trampoline, NULL);
+}
+
+int platform_join_slave(void) { return pthread_join(_slave_thread, NULL); }
+
+/* Apple Silicon reordonne les ecritures entre coeurs : barriere complete */
+void platform_sync(void) { __sync_synchronize(); }
 
 int platform_init(int width, int height) {
   _width = width;
@@ -38,6 +69,37 @@ uint8_t read_vram_byte(uint32_t address);
 uint32_t get_palette_color(uint8_t index);
 static void wait_vblank(void);
 
+#define VBLANK_NS 2420000L
+
+static pthread_t _vblank_thread;
+static int _vblank_thread_started = 0;
+
+static void *vblank_timer(void *arg) {
+  (void)arg;
+
+  struct timespec duration = {0, VBLANK_NS};
+  nanosleep(&duration, NULL);
+
+  vdp_end_vblank();
+
+  return NULL;
+}
+
+static int start_vblank_timer(void) {
+  /* Récupérer les ressources du thread précédent */
+  if (_vblank_thread_started) {
+    pthread_join(_vblank_thread, NULL);
+    _vblank_thread_started = 0;
+  }
+
+  /* Lancer le nouveau timer */
+  if (pthread_create(&_vblank_thread, NULL, vblank_timer, NULL) != 0)
+    return 0;
+
+  _vblank_thread_started = 1;
+  return 1;
+}
+
 int platform_wait_vsync(void) {
   if (_window == NULL)
     return 0;
@@ -47,9 +109,10 @@ int platform_wait_vsync(void) {
 
   vdp_begin_vblank();
 
-  wait_vblank();
-
-  vdp_end_vblank();
+  if (!start_vblank_timer()) {
+    vdp_end_vblank();
+    return 0;
+  }
 
   return display();
 }
@@ -117,8 +180,12 @@ uint32_t get_palette_color(uint8_t index) {
 }
 
 void platform_shutdown(void) {
-  free(_display);
+  if (_vblank_thread_started) {
+    pthread_join(_vblank_thread, NULL);
+    _vblank_thread_started = 0;
+  }
 
+  free(_display);
   _display = NULL;
 
   if (_window != NULL) {

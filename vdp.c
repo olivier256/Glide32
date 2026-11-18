@@ -9,6 +9,7 @@ uint16_t *vdp_dram = vdp_dram1;
 uint16_t *displayFrameBuffer = vdp_dram0;
 
 /* Registers */
+volatile uint16_t comm_regs[COMM_COUNT];
 static volatile uint16_t _bitmapModeRegister;
 volatile uint16_t *const bitmapModeRegister = &_bitmapModeRegister;
 
@@ -19,12 +20,7 @@ static uint16_t _requestedFS = 0;
 static int _inVBlank = 0;
 
 /* met à jour les deux pointeurs de mémoire */
-static void applyFrameBuffer(void) {
-  _activeFS = _requestedFS;
-
-  displayFrameBuffer = _activeFS ? vdp_dram1 : vdp_dram0;
-  vdp_dram = _activeFS ? vdp_dram0 : vdp_dram1;
-}
+static void applyFrameBuffer(void);
 
 /* renvoie la valeur active, pas nécessairement la valeur positionnée */
 uint16_t vdp_read_fbcr(void) {
@@ -47,6 +43,13 @@ void vdp_begin_vblank(void) {
   _inVBlank = 1;
 
   applyFrameBuffer();
+}
+
+static void applyFrameBuffer(void) {
+  _activeFS = _requestedFS;
+
+  displayFrameBuffer = _activeFS ? vdp_dram1 : vdp_dram0;
+  vdp_dram = _activeFS ? vdp_dram0 : vdp_dram1;
 }
 
 void vdp_end_vblank(void) { _inVBlank = 0; }

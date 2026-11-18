@@ -17,6 +17,10 @@ extern uint16_t vdp_palette[VDP_PALETTE_SIZE];
 /* Registers */
 extern volatile uint16_t *const bitmapModeRegister;
 
+/* Registres de communication partages master/slave */
+#define COMM_COUNT 16
+extern volatile uint16_t comm_regs[COMM_COUNT];
+
 /* Frame Buffer Control Register */
 #define FBCR_VBLK 0x8000
 #define FBCR_HBLK 0x4000
