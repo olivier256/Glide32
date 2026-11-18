@@ -43,13 +43,6 @@ void vdp_write_fbcr(uint16_t value) {
     applyFrameBuffer();
 }
 
-void vdp_set_vblank(int enabled) {
-  _inVBlank = enabled;
-
-  if (_inVBlank)
-    applyFrameBuffer();
-}
-
 void vdp_begin_vblank(void) {
   _inVBlank = 1;
 

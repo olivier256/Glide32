@@ -24,7 +24,6 @@ extern volatile uint16_t *const bitmapModeRegister;
 
 uint16_t vdp_read_fbcr(void);
 void vdp_write_fbcr(uint16_t value);
-void vdp_set_vblank(int enabled);
 
 void vdp_begin_vblank(void);
 void vdp_end_vblank(void);
