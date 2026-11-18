@@ -1,11 +1,14 @@
 
-#include "main.h"
 #include "platform.h"
 #include "vdp.h"
 #include <stdlib.h>
 
 #define SCREEN_WIDTH 320
 #define DEFAULT_SCREEN_HEIGHT 224
+
+void setPixel(int x, int y, uint8_t c);
+void lineTableInit(const int screenHeight, const int BITMAP_OFFSET);
+void clearScreen(int screenHeight, uint16_t c);
 
 int main(int argc, char *argv[]) {
   int running = 1;
@@ -25,11 +28,10 @@ int main(int argc, char *argv[]) {
   /* Set Blank Mode */
   *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC);
 
-  /* Line Table Init */
-  const int BITMAP_OFFSET = (screenHeight * 2);
-  lineTableInit(screenHeight, BITMAP_OFFSET);
+  const int bitmapOffset = (screenHeight * 2);
+  lineTableInit(screenHeight, bitmapOffset);
   vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
-  lineTableInit(screenHeight, BITMAP_OFFSET);
+  lineTableInit(screenHeight, bitmapOffset);
 
   /* Set palette */
   vdp_palette[1] = 0x001F;
@@ -52,11 +54,8 @@ int main(int argc, char *argv[]) {
       break;
     }
 
-    for (int row = 0; row < screenHeight; row++) {
-      for (int col = 0; col < SCREEN_WIDTH; col++) {
-        setPixel(col, row, BLACK);
-      }
-    }
+    uint16_t blackAs16Bits = (BLACK << 8) | BLACK;
+    clearScreen(screenHeight, blackAs16Bits);
 
     if (x < SCREEN_WIDTH - 1) {
       x++;
@@ -70,9 +69,9 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-void lineTableInit(const int screenHeight, const int BITMAP_OFFSET) {
+void lineTableInit(const int screenHeight, const int bitmapOffset) {
   for (int y = 0; y < screenHeight; y++) {
-    uint16_t address = (BITMAP_OFFSET / 2) + y * (SCREEN_WIDTH / 2);
+    uint16_t address = (bitmapOffset / 2) + y * (SCREEN_WIDTH / 2);
     vdp_dram[y] = address;
   }
 }
@@ -82,4 +81,13 @@ void setPixel(int x, int y, uint8_t c) {
   uint16_t *word = &vdp_dram[lineAddr_2 + x / 2];
   uint8_t *byte = (uint8_t *)(word + ((x & 1) ? 0 : 1));
   *byte = c;
+}
+
+void clearScreen(int screenHeight, uint16_t c) {
+  int count = screenHeight * (SCREEN_WIDTH / 2);
+  uint16_t *p = vdp_dram + screenHeight;
+
+  for (int i = 0; i < count; i++) {
+    *p++ = c;
+  }
 }
