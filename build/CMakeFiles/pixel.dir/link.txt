@@ -1,1 +1,0 @@
-/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/pixel.dir/main.c.o CMakeFiles/pixel.dir/vdp.c.o CMakeFiles/pixel.dir/platform_minifb.c.o -o pixel  minifb/libminifb.a -framework Cocoa -framework Carbon -framework QuartzCore -framework Metal -framework MetalKit

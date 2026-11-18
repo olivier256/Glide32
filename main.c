@@ -22,20 +22,20 @@ int main(int argc, char *argv[]) {
   if (!platform_init(SCREEN_WIDTH, screenHeight))
     return 1;
 
-  /* Configure the VDP */
-  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
+  /* Set Blank Mode */
+  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC);
 
   /* Line Table Init */
   const int BITMAP_OFFSET = (screenHeight * 2);
-  for (int y = 0; y < screenHeight; y++) {
-    uint16_t address = (BITMAP_OFFSET / 2) + y * (SCREEN_WIDTH / 2);
-
-    vdp_dram0[y] = address;
-    vdp_dram1[y] = address;
-  }
+  lineTableInit(screenHeight, BITMAP_OFFSET);
+  vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
+  lineTableInit(screenHeight, BITMAP_OFFSET);
 
   /* Set palette */
   vdp_palette[1] = 0x001F;
+
+  /* Set Packed Pixel Mode */
+  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
 
   /* Main loop */
   int x = 0;
@@ -46,7 +46,7 @@ int main(int argc, char *argv[]) {
   while (running) {
     setPixel(x, y, RED);
 
-    *frameBufferControlRegister ^= 1;
+    vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
     running = platform_wait_vsync();
     if (!running) {
       break;
@@ -68,6 +68,13 @@ int main(int argc, char *argv[]) {
   platform_shutdown();
 
   return 0;
+}
+
+void lineTableInit(const int screenHeight, const int BITMAP_OFFSET) {
+  for (int y = 0; y < screenHeight; y++) {
+    uint16_t address = (BITMAP_OFFSET / 2) + y * (SCREEN_WIDTH / 2);
+    vdp_dram[y] = address;
+  }
 }
 
 void setPixel(int x, int y, uint8_t c) {

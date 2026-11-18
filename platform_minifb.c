@@ -4,6 +4,7 @@
 #include <MiniFB.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 static struct mfb_window *_window = NULL;
 
@@ -35,23 +36,27 @@ int display(void);
 void displayPackedPixelMode();
 uint8_t read_vram_byte(uint32_t address);
 uint32_t get_palette_color(uint8_t index);
+static void wait_vblank(void);
 
 int platform_wait_vsync(void) {
   if (_window == NULL)
     return 0;
 
-  /* Attend le VBlank */
   if (!mfb_wait_sync(_window))
     return 0;
 
-  /* Sélectionne les buffers */
-  uint16_t fs = *frameBufferControlRegister & 1;
+  vdp_begin_vblank();
 
-  displayFrameBuffer = fs ? vdp_dram1 : vdp_dram0;
-  vdp_dram = fs ? vdp_dram0 : vdp_dram1;
+  wait_vblank();
 
-  /* Affiche le buffer actif */
+  vdp_end_vblank();
+
   return display();
+}
+
+static void wait_vblank(void) {
+  struct timespec duration = {0, 2420000};
+  nanosleep(&duration, NULL);
 }
 
 int display(void) {

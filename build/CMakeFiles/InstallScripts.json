@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/olivier/Documents/c/pixel/build/cmake_install.cmake",
-		"/Users/olivier/Documents/c/pixel/build/minifb/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
