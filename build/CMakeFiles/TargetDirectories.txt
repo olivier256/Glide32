@@ -1,0 +1,15 @@
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/pixel.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/edit_cache.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/rebuild_cache.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/list_install_components.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/install.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/install/local.dir
+/Users/olivier/Documents/c/pixel/build/CMakeFiles/install/strip.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/minifb.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/minifb_version_info.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/edit_cache.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/rebuild_cache.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/list_install_components.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/install.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/install/local.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/install/strip.dir

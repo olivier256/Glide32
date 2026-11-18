@@ -1,0 +1,2 @@
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/CheckOBJC/CMakeFiles/edit_cache.dir
+/Users/olivier/Documents/c/pixel/build/minifb/CMakeFiles/CheckOBJC/CMakeFiles/rebuild_cache.dir
