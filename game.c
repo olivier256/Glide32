@@ -1,5 +1,5 @@
 #include "game.h"
-#include "comm.h"
+#include "interface.h"
 #include "platform.h" /* platform_running() uniquement */
 #include "vdp.h"
 
@@ -34,7 +34,7 @@ void master_main(void) {
   *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
 
   /* Le VDP est prêt : on libère le slave */
-  comm_write(COMM_CMD, CMD_READY);
+  comm[COMM_CMD] = CMD_READY;
 
   /* Main loop */
   int x = 0;
@@ -73,7 +73,7 @@ void slave_main(void) {
   const uint8_t GREEN = 2;
 
   /* Attendre que le master ait initialisé le VDP (tables de lignes) */
-  while (comm_read(COMM_CMD) != CMD_READY)
+  while (comm[COMM_CMD] != CMD_READY)
     if (!platform_running())
       return;
 

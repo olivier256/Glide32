@@ -1,0 +1,27 @@
+#ifndef INTERFACE_H
+#define INTERFACE_H
+
+#include <stdint.h>
+
+/* =========================================================================
+   Interface 32X (émulée) : IC4, circuit 315-5818, « MEGA Drive I/F ».
+   Module sans thread.
+
+   Sur la vraie machine, l'IC4 regroupe les registres système
+   (2000 4000h - 2000 403Fh côté SH2) : masques et acquittement des
+   interruptions, compteur H, FIFO DREQ, PWM, registres de communication...
+   Pour l'instant, seuls les registres de communication sont émulés.
+   ========================================================================= */
+
+/* ---- Registres de communication ------------------------------------------
+   8 mots partagés par les CPU (2000 4020h - 2000 402Eh). Accès direct,
+   comme vdp_palette.
+   volatile : chaque lecture relit vraiment le registre (boucles d'attente).
+   Attention à l'accès par octet via un cast : l'hôte est petit-boutiste,
+   le SH2 gros-boutiste (sur 32X, 2000 4020h est l'octet de poids FORT). */
+
+#define COMM_COUNT 8
+
+extern volatile uint16_t comm[COMM_COUNT];
+
+#endif

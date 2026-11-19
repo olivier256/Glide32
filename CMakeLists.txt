@@ -14,7 +14,7 @@ add_executable(pixel
 	game.c
     vdp.c
     platform_minifb.c
-	comm.c
+	interface.c
 )
 
 target_link_libraries(pixel PRIVATE minifb)
