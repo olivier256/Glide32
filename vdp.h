@@ -33,11 +33,22 @@ int vdp_screen_height(void);
 /* ---- Vu de la plate-forme ---------------------------------------------- */
 
 void vdp_init(int screenHeight);
+
+/* Appelées par la synchro vidéo aux frontières de lignes */
 void vdp_begin_vblank(void);
 void vdp_end_vblank(void);
 
-/* Décode le frame buffer affiché vers un buffer RGB
-   de VDP_SCREEN_WIDTH x vdp_screen_height() pixels (0x00RRGGBB). */
-void vdp_render(uint32_t *rgb);
+/* Décode une ligne affichée du frame buffer affiché vers RGB
+   (VDP_SCREEN_WIDTH pixels, 0x00RRGGBB). */
+void vdp_render_line(int line, uint32_t *rgb);
+
+/* Diagnostics : nombre de VBlank, et nombre de VBlank vus par chaque CPU
+   (au moins une lecture du FBCR avec VBLK = 1 pendant ce VBlank). */
+typedef struct {
+  unsigned long vblanks;
+  unsigned long seen[2];
+} vdp_stats;
+
+void vdp_get_stats(vdp_stats *stats);
 
 #endif

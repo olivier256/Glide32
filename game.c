@@ -1,11 +1,11 @@
 #include "game.h"
 #include "comm.h"
-#include "platform.h" /* étape 1 : platform_wait_vsync() uniquement */
+#include "platform.h" /* platform_running() uniquement */
 #include "vdp.h"
 
 /* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0 /* master -> slave : CMD_QUIT pour arrêter le slave */
-#define CMD_QUIT 0xFFFF
+#define COMM_CMD 0     /* master -> slave */
+#define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
 
 static void setPixel(int x, int y, uint8_t c);
 static void lineTableInit(int screenHeight, int bitmapOffset);
@@ -33,6 +33,9 @@ void master_main(void) {
   /* Set Packed Pixel Mode */
   *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
 
+  /* Le VDP est prêt : on libère le slave */
+  comm_write(COMM_CMD, CMD_READY);
+
   /* Main loop */
   int x = 0;
   int y = screenHeight / 2;
@@ -50,17 +53,16 @@ void master_main(void) {
       x = 0;
 
     /* Garde-fou : la demande de flip doit tomber hors VBlank */
-    waitForDisplay();
+    if (!waitForDisplay())
+      return;
 
     vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
-    if (!platform_wait_vsync())
-      break;
+    if (!waitForVBlank())
+      return;
 
     /* Pendant le VBlank : on prépare le back buffer */
     clearScreen(screenHeight, blackAs16Bits);
   }
-
-  comm_write(COMM_CMD, CMD_QUIT);
 }
 
 /* ---- Slave ------------------------------------------------------------- */
@@ -70,8 +72,11 @@ void slave_main(void) {
   int y = 50;
   const uint8_t GREEN = 2;
 
-  /* V1 : suffit car l'émulation ne génère de VBlank qu'après l'init du master.
-     V2 : attendre CMD_READY dans un registre COMM (sur 32X, VBLK bascule seul). */
+  /* Attendre que le master ait initialisé le VDP (tables de lignes) */
+  while (comm_read(COMM_CMD) != CMD_READY)
+    if (!platform_running())
+      return;
+
   if (!waitForVBlank())
     return;
 
@@ -93,12 +98,12 @@ void slave_main(void) {
   }
 }
 
-/* ---- Attentes VDP (renvoient 0 si le master a demandé l'arrêt) --------- */
+/* ---- Attentes VDP (renvoient 0 si l'hôte demande l'arrêt) -------------- */
 
 /* Attend le début du VBlank (VBLK passe à 1) */
 static int waitForVBlank(void) {
   while ((vdp_read_fbcr() & FBCR_VBLK) == 0)
-    if (comm_read(COMM_CMD) == CMD_QUIT)
+    if (!platform_running())
       return 0;
   return 1;
 }
@@ -106,7 +111,7 @@ static int waitForVBlank(void) {
 /* Attend la fin du VBlank, retour à l'affichage (VBLK passe à 0) */
 static int waitForDisplay(void) {
   while ((vdp_read_fbcr() & FBCR_VBLK) != 0)
-    if (comm_read(COMM_CMD) == CMD_QUIT)
+    if (!platform_running())
       return 0;
   return 1;
 }
