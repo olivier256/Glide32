@@ -1,10 +1,11 @@
 #include "game.h"
 #include "interface.h"
 #include "platform.h" /* platform_running() uniquement */
+#include "sh2mem.h"
 #include "vdp.h"
 
 /* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0       /* master -> slave */
+#define COMM_CMD 0     /* master -> slave */
 #define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
 
 static void setPixel(int x, int y, uint8_t c);
@@ -35,7 +36,7 @@ void master_main(void) {
   *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
 
   /* Le VDP est prêt : on libère le slave */
-  comm[COMM_CMD] = CMD_READY;
+  write16(comm + COMM_CMD, CMD_READY);
 
   /* Main loop */
   int x = 0;
@@ -75,7 +76,7 @@ void slave_main(void) {
   const uint8_t GREEN = 2;
 
   /* Attendre que le master ait initialisé le VDP (tables de lignes) */
-  while (comm[COMM_CMD] != CMD_READY)
+  while (read16(comm + COMM_CMD) != CMD_READY)
     if (!platform_running())
       return;
 
@@ -123,14 +124,21 @@ static int waitForDisplay(void) {
 static void lineTableInit(int screenHeight, int bitmapOffset) {
   for (int y = 0; y < screenHeight; y++) {
     uint16_t address = (bitmapOffset / 2) + y * (VDP_SCREEN_WIDTH / 2);
-    vdp_dram[y] = address;
+    write16(vdp_dram + y, address);
   }
 }
 
 static void setPixel(int x, int y, uint8_t c) {
   uint8_t *vdpDramAsByte = (uint8_t *)vdp_dram;
-  int lineAddr = vdp_dram[y];
+  int lineAddr = read16(vdp_dram + y);
   *(vdpDramAsByte + lineAddr * 2 + x) = c;
+}
+
+/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
+   pixel droit en poids faible, comme MOV.W sur 32X. */
+static void setTwoPixels(int x, int y, uint16_t clcr) {
+  int lineAddr = read16(vdp_dram + y);
+  write16(vdp_dram + lineAddr + x / 2, clcr);
 }
 
 static void clearScreen(int screenHeight, uint16_t c) {
@@ -138,21 +146,6 @@ static void clearScreen(int screenHeight, uint16_t c) {
   uint16_t *p = vdp_dram + screenHeight;
 
   for (int i = 0; i < count; i++) {
-    *p++ = c;
+    write16(p++, c);
   }
-}
-
-/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
-   pixel droit en poids faible, comme MOV.W sur 32X. */
-
-static void setTwoPixels(int x, int y, uint16_t clcr) {
-  int lineAddr = vdp_dram[y];
-
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-  /* Hôte petit-boutiste (Mac) : le mot serait rangé pixel droit d'abord,
-     on échange les deux octets pour retrouver l'ordre du SH2. */
-  clcr = (uint16_t)((clcr << 8) | (clcr >> 8));
-#endif
-
-  vdp_dram[lineAddr + x / 2] = clcr;
 }

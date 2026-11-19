@@ -14,11 +14,11 @@
    ========================================================================= */
 
 /* ---- Registres de communication ------------------------------------------
-   8 mots partagés par les CPU (2000 4020h - 2000 402Eh). Accès direct,
-   comme vdp_palette.
-   volatile : chaque lecture relit vraiment le registre (boucles d'attente).
-   Attention à l'accès par octet via un cast : l'hôte est petit-boutiste,
-   le SH2 gros-boutiste (sur 32X, 2000 4020h est l'octet de poids FORT). */
+   8 mots partagés par les CPU (2000 4020h - 2000 402Eh).
+   Rangés comme sur le SH2 : accès 16 bits par read16/write16 (sh2mem.h),
+   accès 8 bits directs par un cast en uint8_t (2000 4020h = octet de poids
+   fort de COMM0, comme sur 32X).
+   volatile : chaque lecture relit vraiment le registre (boucles d'attente). */
 
 #define COMM_COUNT 8
 

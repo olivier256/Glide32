@@ -18,7 +18,9 @@
 
 /* ---- Vu des CPU (jeu) -------------------------------------------------- */
 
-/* Frame buffer de dessin (celui qui n'est pas affiché) */
+/* Frame buffer de dessin (celui qui n'est pas affiché).
+   Rangé comme sur le SH2 : accès 16/32 bits par read16/write16/read32/
+   write32 (sh2mem.h), accès 8 bits directs. */
 extern uint16_t *vdp_dram;
 extern uint16_t vdp_palette[VDP_PALETTE_SIZE];
 
