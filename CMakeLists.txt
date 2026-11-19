@@ -11,9 +11,10 @@ set(MINIFB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(minifb)
 
 add_executable(pixel
-    main.c
+	game.c
     vdp.c
     platform_minifb.c
+	comm.c
 )
 
 target_link_libraries(pixel PRIVATE minifb)
