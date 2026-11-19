@@ -1,10 +1,11 @@
 #include "game.h"
+#include "bigendian.h"
 #include "interface.h"
 #include "platform.h" /* platform_running() uniquement */
 #include "vdp.h"
 
 /* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0       /* master -> slave */
+#define COMM_CMD 0     /* master -> slave */
 #define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
 
 static void setPixel(int x, int y, uint8_t c);
@@ -47,7 +48,7 @@ void master_main(void) {
 
   for (;;) {
     setPixel(x, y, RED);
-    setTwoPixels(100, 80, (RED << 8) | 2); /* rouge à gauche, vert à droite */
+    setTwoPixels(100, 80, (RED << 8) | 2); /* test : rouge à gauche, vert à droite */
 
     if (x < VDP_SCREEN_WIDTH - 1)
       x++;
@@ -133,6 +134,13 @@ static void setPixel(int x, int y, uint8_t c) {
   *(vdpDramAsByte + lineAddr * 2 + x) = c;
 }
 
+/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
+   pixel droit en poids faible, comme MOV.W sur 32X. */
+static void setTwoPixels(int x, int y, uint16_t clcr) {
+  int lineAddr = vdp_dram[y];
+  vdp_dram[lineAddr + x / 2] = BE16(clcr);
+}
+
 static void clearScreen(int screenHeight, uint16_t c) {
   int count = screenHeight * (VDP_SCREEN_WIDTH / 2);
   uint16_t *p = vdp_dram + screenHeight;
@@ -140,19 +148,4 @@ static void clearScreen(int screenHeight, uint16_t c) {
   for (int i = 0; i < count; i++) {
     *p++ = c;
   }
-}
-
-/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
-   pixel droit en poids faible, comme MOV.W sur 32X. */
-
-static void setTwoPixels(int x, int y, uint16_t clcr) {
-  int lineAddr = vdp_dram[y];
-
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-  /* Hôte petit-boutiste (Mac) : le mot serait rangé pixel droit d'abord,
-     on échange les deux octets pour retrouver l'ordre du SH2. */
-  clcr = (uint16_t)((clcr << 8) | (clcr >> 8));
-#endif
-
-  vdp_dram[lineAddr + x / 2] = clcr;
 }
