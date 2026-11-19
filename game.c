@@ -4,10 +4,11 @@
 #include "vdp.h"
 
 /* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0     /* master -> slave */
+#define COMM_CMD 0       /* master -> slave */
 #define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
 
 static void setPixel(int x, int y, uint8_t c);
+static void setTwoPixels(int x, int y, uint16_t clcr);
 static void lineTableInit(int screenHeight, int bitmapOffset);
 static void clearScreen(int screenHeight, uint16_t c);
 static int waitForVBlank(void);
@@ -46,6 +47,7 @@ void master_main(void) {
 
   for (;;) {
     setPixel(x, y, RED);
+    setTwoPixels(100, 80, (RED << 8) | 2); /* rouge à gauche, vert à droite */
 
     if (x < VDP_SCREEN_WIDTH - 1)
       x++;
@@ -126,13 +128,9 @@ static void lineTableInit(int screenHeight, int bitmapOffset) {
 }
 
 static void setPixel(int x, int y, uint8_t c) {
-  uint16_t lineAddr_2 = vdp_dram[y];
-  uint16_t *word = &vdp_dram[lineAddr_2 + x / 2];
-
-  if (x & 1)
-    *word = (*word & 0xFF00) | c;
-  else
-    *word = (*word & 0x00FF) | ((uint16_t)c << 8);
+  uint8_t *vdpDramAsByte = (uint8_t *)vdp_dram;
+  int lineAddr = vdp_dram[y];
+  *(vdpDramAsByte + lineAddr * 2 + x) = c;
 }
 
 static void clearScreen(int screenHeight, uint16_t c) {
@@ -142,4 +140,19 @@ static void clearScreen(int screenHeight, uint16_t c) {
   for (int i = 0; i < count; i++) {
     *p++ = c;
   }
+}
+
+/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
+   pixel droit en poids faible, comme MOV.W sur 32X. */
+
+static void setTwoPixels(int x, int y, uint16_t clcr) {
+  int lineAddr = vdp_dram[y];
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  /* Hôte petit-boutiste (Mac) : le mot serait rangé pixel droit d'abord,
+     on échange les deux octets pour retrouver l'ordre du SH2. */
+  clcr = (uint16_t)((clcr << 8) | (clcr >> 8));
+#endif
+
+  vdp_dram[lineAddr + x / 2] = clcr;
 }

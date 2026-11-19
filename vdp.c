@@ -89,15 +89,6 @@ void vdp_get_stats(vdp_stats *stats) {
 
 /* ---- Rendu ------------------------------------------------------------- */
 
-static uint8_t read_vram_byte(uint32_t address) {
-  uint16_t word = displayFrameBuffer[address / 2];
-
-  if ((address & 1) == 0)
-    return (uint8_t)(word >> 8);
-
-  return (uint8_t)(word & 0x00FF);
-}
-
 static uint32_t get_palette_color(uint8_t index) {
   uint16_t color = vdp_palette[index];
 
@@ -115,9 +106,12 @@ static uint32_t get_palette_color(uint8_t index) {
 void vdp_render_line(int line, uint32_t *rgb) {
   switch (*bitmapModeRegister & 3) {
   case 1: { // PACKED_PIXEL_MODE
-    uint32_t address = (uint32_t)displayFrameBuffer[line] * 2;
+    /* Un pixel = un octet, lus dans l'ordre des adresses : le pixel x est
+       l'octet (adresse de ligne * 2 + x), comme sur la vraie 32X. */
+    const uint8_t *pixels =
+        (const uint8_t *)displayFrameBuffer + displayFrameBuffer[line] * 2;
     for (int col = 0; col < VDP_SCREEN_WIDTH; col++)
-      rgb[col] = get_palette_color(read_vram_byte(address + col));
+      rgb[col] = get_palette_color(pixels[col]);
     break;
   }
   default: // BLANK_MODE ; DIRECT_COLOR_MODE, RUN_LENGTH_MODE : à faire
