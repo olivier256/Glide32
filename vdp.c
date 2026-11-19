@@ -1,6 +1,5 @@
 #include "vdp.h"
 #include "platform.h"
-#include "sh2mem.h"
 
 /* Mémoire */
 static uint16_t vdp_dram0[VDP_DRAM_SIZE / 2];
@@ -109,9 +108,8 @@ void vdp_render_line(int line, uint32_t *rgb) {
   case 1: { // PACKED_PIXEL_MODE
     /* Un pixel = un octet, lus dans l'ordre des adresses : le pixel x est
        l'octet (adresse de ligne * 2 + x), comme sur la vraie 32X. */
-    /* La table de lignes est en mots gros-boutistes (convention sh2mem.h) */
-    const uint8_t *pixels = (const uint8_t *)displayFrameBuffer +
-                            read16(displayFrameBuffer + line) * 2;
+    const uint8_t *pixels =
+        (const uint8_t *)displayFrameBuffer + displayFrameBuffer[line] * 2;
     for (int col = 0; col < VDP_SCREEN_WIDTH; col++)
       rgb[col] = get_palette_color(pixels[col]);
     break;
