@@ -5,15 +5,35 @@
 #include "vdp.h"
 
 /* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0     /* master -> slave */
+#define COMM_CMD 0       /* master -> slave */
 #define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
 
 static void setPixel(int x, int y, uint8_t c);
 static void setTwoPixels(int x, int y, uint16_t clcr);
 static void lineTableInit(int screenHeight, int bitmapOffset);
 static void clearScreen(int screenHeight, uint16_t c);
+static int waitForMasterVInt(void);
+static int waitForSlaveVInt(void);
 static int waitForVBlank(void);
 static int waitForDisplay(void);
+
+/* ---- Interruptions -----------------------------------------------------
+   Chaque routine V_INT acquitte l'interruption et compte les VBlank de son
+   CPU. Un compteur qui avance ne peut pas être raté, contrairement au bit
+   VBLK, qui retombe à 0 : c'est tout l'intérêt de V_INT. */
+
+static volatile unsigned long masterVInts = 0;
+static volatile unsigned long slaveVInts = 0;
+
+void master_vint(void) {
+  interface_clear_vint();
+  masterVInts++;
+}
+
+void slave_vint(void) {
+  interface_clear_vint();
+  slaveVInts++;
+}
 
 /* ---- Master ------------------------------------------------------------ */
 
@@ -35,6 +55,10 @@ void master_main(void) {
   /* Set Packed Pixel Mode */
   *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
 
+  /* V_INT : acquitter une éventuelle V_INT déjà mémorisée, puis démasquer */
+  interface_clear_vint();
+  interface_write_intmask(interface_read_intmask() | INTMASK_V);
+
   /* Le VDP est prêt : on libère le slave */
   comm[COMM_CMD] = CMD_READY;
 
@@ -48,7 +72,6 @@ void master_main(void) {
 
   for (;;) {
     setPixel(x, y, RED);
-    setTwoPixels(100, 80, (RED << 8) | 2); /* test : rouge à gauche, vert à droite */
 
     if (x < VDP_SCREEN_WIDTH - 1)
       x++;
@@ -80,11 +103,13 @@ void slave_main(void) {
     if (!platform_running())
       return;
 
-  if (!waitForVBlank())
-    return;
+  interface_clear_vint();
+  interface_write_intmask(interface_read_intmask() | INTMASK_V);
 
   for (;;) {
-    /* Le master efface pendant le VBlank : on attend qu'il ait fini */
+    /* Début du VBlank, puis fin : le master a fini d'effacer */
+    if (!waitForVBlank())
+      return;
     if (!waitForDisplay())
       return;
 
@@ -95,15 +120,29 @@ void slave_main(void) {
       x++;
     else
       x = 0;
-
-    if (!waitForVBlank())
-      return;
   }
 }
 
-/* ---- Attentes VDP (renvoient 0 si l'hôte demande l'arrêt) -------------- */
+/* ---- Attentes (renvoient 0 si l'hôte demande l'arrêt) ------------------ */
 
-/* Attend le début du VBlank (VBLK passe à 1) */
+/* Attend la prochaine V_INT de ce CPU (son compteur avance) */
+static int waitForMasterVInt(void) {
+  unsigned long start = masterVInts;
+  while (masterVInts == start)
+    if (!platform_running())
+      return 0;
+  return 1;
+}
+
+static int waitForSlaveVInt(void) {
+  unsigned long start = slaveVInts;
+  while (slaveVInts == start)
+    if (!platform_running())
+      return 0;
+  return 1;
+}
+
+/* Attend le VBlank, retour à l'affichage (VBLK passe à 1) */
 static int waitForVBlank(void) {
   while ((vdp_read_fbcr() & FBCR_VBLK) == 0)
     if (!platform_running())

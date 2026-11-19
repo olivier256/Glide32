@@ -1,9 +1,11 @@
 #include "platform.h"
 #include "game.h"
+#include "interface.h"
 #include "vdp.h"
 
 #include <MiniFB.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +54,14 @@ static pthread_t _videoThread;
 static pthread_t _masterThread;
 static pthread_t _slaveThread;
 
+/* Threads des CPU, pour leur envoyer les interruptions. Un CPU ne reçoit
+   d'interruption qu'une fois son thread démarré. */
+static pthread_t _cpuThread[PLATFORM_CPU_COUNT];
+static volatile int _cpuReady[PLATFORM_CPU_COUNT];
+
+/* Signal qui tient lieu de lignes IRL */
+#define INTERRUPT_SIGNAL SIGUSR1
+
 static volatile int64_t _vblankStartNs = 0;
 
 /* ==== Diagnostics (activés par VDP_STATS=1) ===============================
@@ -79,6 +89,7 @@ static void *videoThread(void *arg);
 static void *masterThread(void *arg);
 static void *slaveThread(void *arg);
 static void printStats(const char *when, double seconds);
+static int installInterruptHandler(void);
 
 /* ==== Temps =============================================================== */
 
@@ -121,6 +132,11 @@ int main(int argc, char *argv[]) {
 
   if (!platform_init(VDP_SCREEN_WIDTH, h))
     return 1;
+
+  if (!installInterruptHandler()) {
+    platform_shutdown();
+    return 1;
+  }
 
   /* Mise sous tension : la synchro vidéo démarre, puis la BootROM lance
      les deux CPU à leurs points d'entrée, en même temps. */
@@ -183,12 +199,14 @@ int main(int argc, char *argv[]) {
   /* Arrêt : les CPU le voient dans leurs boucles d'attente */
   _running = 0;
 
+  /* La synchro vidéo s'arrête d'abord : elle ne doit plus envoyer
+     d'interruption à un thread CPU terminé. */
+  if (videoStarted)
+    pthread_join(_videoThread, NULL);
   if (masterStarted)
     pthread_join(_masterThread, NULL);
   if (slaveStarted)
     pthread_join(_slaveThread, NULL);
-  if (videoStarted)
-    pthread_join(_videoThread, NULL);
 
   if (_statsEnabled)
     printStats("fin ", (nowNs() - start) / 1e9);
@@ -216,17 +234,63 @@ double platform_vblank_elapsed_ms(void) {
 static void *masterThread(void *arg) {
   (void)arg;
   _cpuId = PLATFORM_CPU_MASTER;
+  _cpuThread[PLATFORM_CPU_MASTER] = pthread_self();
+  _cpuReady[PLATFORM_CPU_MASTER] = 1;
   setHighPriority();
   master_main();
+  _cpuReady[PLATFORM_CPU_MASTER] = 0;
   return NULL;
 }
 
 static void *slaveThread(void *arg) {
   (void)arg;
   _cpuId = PLATFORM_CPU_SLAVE;
+  _cpuThread[PLATFORM_CPU_SLAVE] = pthread_self();
+  _cpuReady[PLATFORM_CPU_SLAVE] = 1;
   setHighPriority();
   slave_main();
+  _cpuReady[PLATFORM_CPU_SLAVE] = 0;
   return NULL;
+}
+
+/* ==== Interruptions ========================================================
+   Les lignes IRL d'un SH2 sont émulées par un signal envoyé à son thread :
+   le thread est réellement interrompu, où qu'il en soit (boucle d'attente
+   ou calcul), comme le SH2. Le gestionnaire joue le rôle de la table de
+   vecteurs : il appelle la routine V_INT du CPU, et la rappelle tant que
+   l'interruption reste active (non acquittée), comme le SH2 qui reprend
+   l'interruption dès son retour (RTE).
+   Pendant le gestionnaire, le signal est bloqué pour ce thread : une
+   nouvelle interruption attend la fin de la routine, comme sur le SH2 où
+   le niveau du SR est relevé pendant la routine. */
+
+void platform_raise_interrupt(int cpu) {
+  if (cpu < 0 || cpu >= PLATFORM_CPU_COUNT || !_cpuReady[cpu])
+    return;
+  pthread_kill(_cpuThread[cpu], INTERRUPT_SIGNAL);
+}
+
+static void interruptHandler(int sig) {
+  (void)sig;
+  int cpu = _cpuId;
+  if (cpu < 0)
+    return;
+
+  while (_running && interface_vint_active(cpu)) {
+    if (cpu == PLATFORM_CPU_MASTER)
+      master_vint();
+    else
+      slave_vint();
+    interface_count_handled(cpu, !interface_vint_active(cpu));
+  }
+}
+
+static int installInterruptHandler(void) {
+  struct sigaction sa;
+  sa.sa_handler = interruptHandler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART; /* les appels système interrompus reprennent */
+  return sigaction(INTERRUPT_SIGNAL, &sa, NULL) == 0;
 }
 
 /* ==== Fenêtre ============================================================= */
@@ -332,6 +396,7 @@ static void beginLine(int line, int64_t startNs) {
     /* Début du VBlank : l'image affichée est complète */
     _vblankStartNs = startNs;
     vdp_begin_vblank();
+    interface_raise_vint(); /* le VDP signale le VBlank à l'IC4 */
     publishFrame();
   }
 }
@@ -391,6 +456,14 @@ static void *videoThread(void *arg) {
 static void printStats(const char *when, double seconds) {
   vdp_stats vs;
   vdp_get_stats(&vs);
+  interface_stats is;
+  interface_get_stats(&is);
+
+  fprintf(stderr,
+          "[VDP %s%.1f s] V_INT levees %lu | master : traitees %lu, "
+          "non acquittees %lu | slave : traitees %lu, non acquittees %lu\n",
+          when, seconds, is.raised, is.handled[0], is.unacked[0],
+          is.handled[1], is.unacked[1]);
 
   fprintf(stderr,
           "[VDP %s%.1f s] VBlank %lu, vus master %lu (rates %lu), "

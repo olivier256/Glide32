@@ -17,6 +17,8 @@ add_executable(pixel
 	interface.c
 )
 
+target_compile_options(pixel PRIVATE -Wall -Wextra)
+
 target_link_libraries(pixel PRIVATE minifb)
 
 set_target_properties(pixel PROPERTIES LINKER_LANGUAGE CXX)

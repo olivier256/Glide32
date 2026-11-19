@@ -35,4 +35,8 @@ int platform_cpu_id(void);
 /* Barrière mémoire entre threads (émule les accès cache-through du SH2) */
 void platform_sync(void);
 
+/* Interrompt le CPU indiqué (équivalent de ses lignes IRL) : la plate-forme
+   exécute sa routine tant qu'une interruption y est active. */
+void platform_raise_interrupt(int cpu);
+
 #endif

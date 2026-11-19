@@ -1,11 +1,9 @@
-Endianness : macros BE16/BE32 (bigendian.h)
+V_INT
 
-- BE16(v) / BE32(v) renvoient la valeur à écrire en mémoire (ou relue)
-  pour respecter l'ordre des octets du SH2. Elles échangent les octets
-  sur un hôte petit-boutiste (__builtin_bswap16/32, argument évalué une
-  seule fois) et ne font rien sur 32X.
-- setTwoPixels utilise BE16 (équivalent MOV.W) ; plus de #if dans le jeu.
-- Règle : seuls les pixels du mode Packed Pixel écrits par mot ou mot
-  long en ont besoin. La table de lignes, les accès par octet, la
-  palette, la SDRAM et les registres COMM (accédés avec une même
-  taille) s'en passent.
+**Ce qui reste pour plus tard** :
+- le masque du SR (sections critiques entre une routine d'interruption et la boucle principale) ;
+- H_INT, avec la synchro qui repasse en attente active ligne par ligne quand un CPU la démasque ;
+- les interruptions CMD (venant du 68000) et PWM ;
+- le compteur d'images (horloge du jeu) dans `master_vint()`, le jour où vous en aurez besoin ;
+- les blocages intermittents de MiniFB, à analyser avec `sample` à la prochaine occurrence ;
+- `setTwoPixels()`, qui n'est pas appelée pour l'instant.
