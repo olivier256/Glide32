@@ -33,3 +33,21 @@ target_compile_options(pixel PRIVATE -Wall -Wextra)
 target_link_libraries(pixel PRIVATE minifb)
 
 set_target_properties(pixel PROPERTIES LINKER_LANGUAGE CXX)
+
+# Banc de mesure : bench.c remplace game.c
+add_executable(pixel_bench
+    bench.c
+    glide.c
+    tnl.c
+    sintab.c
+    vdp.c
+    interface.c
+    sh2.c
+    platform_minifb.c
+)
+
+target_compile_options(pixel_bench PRIVATE -Wall -Wextra)
+
+target_link_libraries(pixel_bench PRIVATE minifb)
+
+set_target_properties(pixel_bench PROPERTIES LINKER_LANGUAGE CXX)
