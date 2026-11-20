@@ -1,26 +1,20 @@
 #include "game.h"
-#include "bigendian.h"
+#include "glide.h"
 #include "interface.h"
 #include "platform.h" /* platform_running() uniquement */
+#include "tnl.h"
 #include "vdp.h"
 
-/* Protocole master <-> slave via les registres COMM */
-#define COMM_CMD 0       /* master -> slave */
-#define CMD_READY 0x0001 /* le master a fini d'initialiser le VDP */
+/* ---- Palette ----------------------------------------------------------- */
 
-static void setPixel(int x, int y, uint8_t c);
-static void setTwoPixels(int x, int y, uint16_t clcr);
-static void lineTableInit(int screenHeight, int bitmapOffset);
-static void clearScreen(int screenHeight, uint16_t c);
-static int waitForMasterVInt(void);
-static int waitForSlaveVInt(void);
-static int waitForVBlank(void);
-static int waitForDisplay(void);
+#define BLACK 0
+#define RED 1
+#define GREEN 2
+#define WHITE 3
 
 /* ---- Interruptions -----------------------------------------------------
    Chaque routine V_INT acquitte l'interruption et compte les VBlank de son
-   CPU. Un compteur qui avance ne peut pas être raté, contrairement au bit
-   VBLK, qui retombe à 0 : c'est tout l'intérêt de V_INT. */
+   CPU. Le compteur servira d'horloge au jeu. */
 
 static volatile unsigned long masterVInts = 0;
 static volatile unsigned long slaveVInts = 0;
@@ -38,153 +32,86 @@ void slave_vint(void) {
 /* ---- Master ------------------------------------------------------------ */
 
 void master_main(void) {
-  const int screenHeight = vdp_screen_height();
+  /* VDP, FIFO, et libération du slave */
+  grSstWinOpen();
 
-  /* Set Blank Mode */
-  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC);
-
-  const int bitmapOffset = (screenHeight * 2);
-  lineTableInit(screenHeight, bitmapOffset);
-  vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
-  lineTableInit(screenHeight, bitmapOffset);
-
-  /* Set palette */
-  vdp_palette[1] = 0x001F;
-  vdp_palette[2] = 0x03E0;
-
-  /* Set Packed Pixel Mode */
-  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
+  /* Palette (BGR 5:5:5) */
+  vdp_palette[BLACK] = 0x0000;
+  vdp_palette[RED] = 0x001F;
+  vdp_palette[GREEN] = 0x03E0;
+  vdp_palette[WHITE] = 0x7FFF;
 
   /* V_INT : acquitter une éventuelle V_INT déjà mémorisée, puis démasquer */
   interface_clear_vint();
   interface_write_intmask(interface_read_intmask() | INTMASK_V);
 
-  /* Le VDP est prêt : on libère le slave */
-  comm[COMM_CMD] = CMD_READY;
+  /* SLI visible (lignes du master en rouge, du slave en vert) :
+     grSliDebug(1, RED, GREEN); */
 
-  /* Main loop */
-  int x = 0;
-  int y = screenHeight / 2;
-  const uint8_t BLACK = 0;
-  const uint8_t RED = 1;
+  /* Z-buffer avec ooz (1/z) : le plus grand est le plus proche, d'où
+     GR_CMP_GREATER et un effacement à 0 (exemple 7.1 du guide Glide). */
+  grDepthBufferMode(GR_DEPTHBUFFER_ZBUFFER);
+  grDepthBufferFunction(GR_CMP_GREATER);
+  grDepthMask(1);
 
-  uint16_t blackAs16Bits = (BLACK << 8) | BLACK;
+  /* Projection : l'œil regarde vers les z négatifs. Plan proche à 300,
+     fenêtre de 240 x (3 * h / 4) sur ce plan : la focale vaut 400 pixels,
+     si bien qu'à 400 de l'œil, une unité fait exactement un pixel. */
+  const int h = vdp_screen_height();
+  glViewport(0, 0, VDP_SCREEN_WIDTH, h);
+  glFrustum(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
+             FIXED(300), FIXED(1000));
 
-  for (;;) {
-    setPixel(x, y, RED);
+  /* Les triangles de l'énoncé, donnés en pixels (x, y vers le bas) à
+     l'écran, deviennent : x - 160, 112 - y (h = 224), z = -400.
+     Au départ, chacun s'affiche exactement aux coordonnées de l'énoncé. */
+  GLangle redAngle = 0;
+  GLangle greenAngle = 0;
 
-    if (x < VDP_SCREEN_WIDTH - 1)
-      x++;
-    else
-      x = 0;
+  while (platform_running()) {
+    grBufferClear(BLACK, 0);
 
-    /* Garde-fou : la demande de flip doit tomber hors VBlank */
-    if (!waitForDisplay())
-      return;
+    /* Rouge : A (100, 50), B (100, 150), C (200, 100) ; rotation autour
+       d'un axe parallèle à y, en x = 150, z = profondeur de la scène. */
+    glLoadIdentity();
+    glTranslate(FIXED(-10), 0, FIXED(-400)); /* 3. axe remis en place */
+    glRotate(redAngle, 0, FIXED_ONE, 0);     /* 2. rotation autour de y */
+    glTranslate(FIXED(10), 0, FIXED(400));   /* 1. axe ramené à l'origine */
 
-    vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
-    if (!waitForVBlank())
-      return;
+    glIndexub(RED);
+    glBegin(GL_TRIANGLES);
+    glVertex3(FIXED(-60), FIXED(62), FIXED(-400));
+    glVertex3(FIXED(-60), FIXED(-38), FIXED(-400));
+    glVertex3(FIXED(40), FIXED(12), FIXED(-400));
+    glEnd();
 
-    /* Pendant le VBlank : on prépare le back buffer */
-    clearScreen(screenHeight, blackAs16Bits);
+    /* Vert : D (300, 30), E (300, 190), F (125, 170) ; rotation autour
+       d'un axe parallèle à x, en y = 110. */
+    glLoadIdentity();
+    glTranslate(0, FIXED(2), FIXED(-400));
+    glRotate(greenAngle, FIXED_ONE, 0, 0);
+    glTranslate(0, FIXED(-2), FIXED(400));
+
+    glIndexub(GREEN);
+    glBegin(GL_TRIANGLES);
+    glVertex3(FIXED(140), FIXED(82), FIXED(-400));
+    glVertex3(FIXED(140), FIXED(-78), FIXED(-400));
+    glVertex3(FIXED(-35), FIXED(-58), FIXED(-400));
+    glEnd();
+
+    grBufferSwap(1);
+
+    redAngle += GL_DEG(2);   /* un tour en 3 secondes */
+    greenAngle += GL_DEG(1); /* un tour en 6 secondes */
   }
 }
 
 /* ---- Slave ------------------------------------------------------------- */
 
 void slave_main(void) {
-  int x = 50;
-  int y = 50;
-  const uint8_t GREEN = 2;
-
-  /* Attendre que le master ait initialisé le VDP (tables de lignes) */
-  while (comm[COMM_CMD] != CMD_READY)
-    if (!platform_running())
-      return;
-
   interface_clear_vint();
   interface_write_intmask(interface_read_intmask() | INTMASK_V);
 
-  for (;;) {
-    /* Début du VBlank, puis fin : le master a fini d'effacer */
-    if (!waitForVBlank())
-      return;
-    if (!waitForDisplay())
-      return;
-
-    setPixel(x, y, GREEN);
-    setPixel(x, y + 1, GREEN);
-
-    if (x < VDP_SCREEN_WIDTH - 1)
-      x++;
-    else
-      x = 0;
-  }
-}
-
-/* ---- Attentes (renvoient 0 si l'hôte demande l'arrêt) ------------------ */
-
-/* Attend la prochaine V_INT de ce CPU (son compteur avance) */
-static int waitForMasterVInt(void) {
-  unsigned long start = masterVInts;
-  while (masterVInts == start)
-    if (!platform_running())
-      return 0;
-  return 1;
-}
-
-static int waitForSlaveVInt(void) {
-  unsigned long start = slaveVInts;
-  while (slaveVInts == start)
-    if (!platform_running())
-      return 0;
-  return 1;
-}
-
-/* Attend le VBlank, retour à l'affichage (VBLK passe à 1) */
-static int waitForVBlank(void) {
-  while ((vdp_read_fbcr() & FBCR_VBLK) == 0)
-    if (!platform_running())
-      return 0;
-  return 1;
-}
-
-/* Attend la fin du VBlank, retour à l'affichage (VBLK passe à 0) */
-static int waitForDisplay(void) {
-  while ((vdp_read_fbcr() & FBCR_VBLK) != 0)
-    if (!platform_running())
-      return 0;
-  return 1;
-}
-
-/* ---- Dessin ------------------------------------------------------------ */
-
-static void lineTableInit(int screenHeight, int bitmapOffset) {
-  for (int y = 0; y < screenHeight; y++) {
-    uint16_t address = (bitmapOffset / 2) + y * (VDP_SCREEN_WIDTH / 2);
-    vdp_dram[y] = address;
-  }
-}
-
-static void setPixel(int x, int y, uint8_t c) {
-  uint8_t *vdpDramAsByte = (uint8_t *)vdp_dram;
-  int lineAddr = vdp_dram[y];
-  *(vdpDramAsByte + lineAddr * 2 + x) = c;
-}
-
-/* Écrit deux pixels d'un coup (x pair) : clcr = pixel gauche en poids fort,
-   pixel droit en poids faible, comme MOV.W sur 32X. */
-static void setTwoPixels(int x, int y, uint16_t clcr) {
-  int lineAddr = vdp_dram[y];
-  vdp_dram[lineAddr + x / 2] = BE16(clcr);
-}
-
-static void clearScreen(int screenHeight, uint16_t c) {
-  int count = screenHeight * (VDP_SCREEN_WIDTH / 2);
-  uint16_t *p = vdp_dram + screenHeight;
-
-  for (int i = 0; i < count; i++) {
-    *p++ = c;
-  }
+  /* Le slave devient la seconde carte du SLI */
+  grSlaveLoop();
 }
