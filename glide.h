@@ -1,6 +1,7 @@
 #ifndef GLIDE_H
 #define GLIDE_H
 
+#include "fixed.h"
 #include <stdint.h>
 
 /* =========================================================================
@@ -35,12 +36,13 @@
 
 /* ---- Types ------------------------------------------------------------- */
 
-/* Virgule fixe 16.16 (remplace FxFloat de Glide). */
-typedef int32_t GrFixed;
+/* Virgule fixe 16.16 (remplace FxFloat de Glide) : alias de fixed.h,
+   pour garder les noms de Glide. */
+typedef Fixed GrFixed;
 
-#define GR_FIXED_ONE ((GrFixed)0x00010000)
-#define GR_FIXED_HALF ((GrFixed)0x00008000)
-#define GR_FIXED(i) ((GrFixed)((i) * GR_FIXED_ONE))
+#define GR_FIXED_ONE FIXED_ONE
+#define GR_FIXED_HALF FIXED_HALF
+#define GR_FIXED(i) FIXED(i)
 
 /* Couleur : index dans la palette 8 bits du mode Packed Pixel
    (remplace GrColor_t, qui est en RGBA 32 bits dans Glide). */

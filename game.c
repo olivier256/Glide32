@@ -2,6 +2,7 @@
 #include "glide.h"
 #include "interface.h"
 #include "platform.h" /* platform_running() uniquement */
+#include "tnl.h"
 #include "vdp.h"
 
 /* ---- Palette ----------------------------------------------------------- */
@@ -28,47 +29,11 @@ void slave_vint(void) {
   slaveVInts++;
 }
 
-/* ---- Projection -----------------------------------------------------------
-   Glide ne projette pas : c'est au jeu de passer de la 3D à l'écran.
-   Repère de la caméra : x vers la droite, y vers le haut, z vers l'avant
-   (la caméra est à l'origine et regarde vers les z positifs).
-   Tout est en 16.16. */
-
-typedef struct {
-  GrFixed x, y, z;
-} Vec3;
-
-/* Distance focale en pixels : 160 donne 90 degrés d'angle horizontal */
-#define FOCAL 160
-
-/* Plan proche : ooz vaut 65535 à cette distance. Pas encore de découpage :
-   tous les points doivent rester à z >= NEAR_Z. */
-#define NEAR_Z GR_FIXED(2)
-
-static int screenHeight;
-
-static void project(const Vec3 *v, GrVertex *out) {
-  const int64_t z = v->z;
-
-  /* x_écran = centre + FOCAL * x / z ; y inversé (l'écran descend) */
-  out->x = GR_FIXED(VDP_SCREEN_WIDTH / 2) +
-           (GrFixed)(((int64_t)v->x * FOCAL * GR_FIXED_ONE) / z);
-  out->y = GR_FIXED(screenHeight / 2) -
-           (GrFixed)(((int64_t)v->y * FOCAL * GR_FIXED_ONE) / z);
-
-  /* ooz = 65535 * NEAR_Z / z, en 16.16 */
-  int64_t ooz = ((int64_t)65535 * NEAR_Z * GR_FIXED_ONE) / z;
-  if (ooz > (int64_t)GR_DEPTH(65535))
-    ooz = GR_DEPTH(65535);
-  out->ooz = (GrDepth)ooz;
-}
-
 /* ---- Master ------------------------------------------------------------ */
 
 void master_main(void) {
   /* VDP, FIFO, et libération du slave */
   grSstWinOpen();
-  screenHeight = vdp_screen_height();
 
   /* Palette (BGR 5:5:5) */
   vdp_palette[BLACK] = 0x0000;
@@ -89,46 +54,55 @@ void master_main(void) {
   grDepthBufferFunction(GR_CMP_GREATER);
   grDepthMask(1);
 
-  /* Deux triangles en 3D qui se traversent :
-     - le rouge : côté vertical AB à gauche et proche, sommet C au fond ;
-     - le vert : côté AB à droite, qui avance et recule en z, sommet C au
-       fond à gauche. Son côté AB est incliné en profondeur (B est 2 plus
-       loin que A) : sinon, les deux plans contiendraient la verticale, et
-       leur intersection serait une droite verticale. */
-  const Vec3 redA = {GR_FIXED(-3), GR_FIXED(2), GR_FIXED(4)};
-  const Vec3 redB = {GR_FIXED(-3), GR_FIXED(-2), GR_FIXED(4)};
-  const Vec3 redC = {GR_FIXED(3), GR_FIXED(0), GR_FIXED(10)};
+  /* Projection : l'œil regarde vers les z négatifs. Plan proche à 300,
+     fenêtre de 240 x (3 * h / 4) sur ce plan : la focale vaut 400 pixels,
+     si bien qu'à 400 de l'œil, une unité fait exactement un pixel. */
+  const int h = vdp_screen_height();
+  glViewport(0, 0, VDP_SCREEN_WIDTH, h);
+  glFrustumx(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
+             FIXED(300), FIXED(1000));
 
-  Vec3 greenA = {GR_FIXED(5) / 2, GR_FIXED(2), GR_FIXED(3)};
-  Vec3 greenB = {GR_FIXED(5) / 2, GR_FIXED(-2), GR_FIXED(5)};
-  const Vec3 greenC = {GR_FIXED(-3), GR_FIXED(0), GR_FIXED(10)};
-
-  GrFixed dz = GR_FIXED_ONE / 32; /* par image */
+  /* Les triangles de l'énoncé, donnés en pixels (x, y vers le bas) à
+     l'écran, deviennent : x - 160, 112 - y (h = 224), z = -400.
+     Au départ, chacun s'affiche exactement aux coordonnées de l'énoncé. */
+  GLangle redAngle = 0;
+  GLangle greenAngle = 0;
 
   while (platform_running()) {
-    GrVertex a, b, c;
-
     grBufferClear(BLACK, 0);
 
-    grConstantColorValue(RED);
-    project(&redA, &a);
-    project(&redB, &b);
-    project(&redC, &c);
-    grDrawTriangle(&a, &b, &c);
+    /* Rouge : A (100, 50), B (100, 150), C (200, 100) ; rotation autour
+       d'un axe parallèle à y, en x = 150, z = profondeur de la scène. */
+    glLoadIdentity();
+    glTranslatex(FIXED(-10), 0, FIXED(-400)); /* 3. axe remis en place */
+    glRotatex(redAngle, 0, FIXED_ONE, 0);     /* 2. rotation autour de y */
+    glTranslatex(FIXED(10), 0, FIXED(400));   /* 1. axe ramené à l'origine */
 
-    grConstantColorValue(GREEN);
-    project(&greenA, &a);
-    project(&greenB, &b);
-    project(&greenC, &c);
-    grDrawTriangle(&a, &b, &c);
+    glIndexub(RED);
+    glBegin(GL_TRIANGLES);
+    glVertex3x(FIXED(-60), FIXED(62), FIXED(-400));
+    glVertex3x(FIXED(-60), FIXED(-38), FIXED(-400));
+    glVertex3x(FIXED(40), FIXED(12), FIXED(-400));
+    glEnd();
+
+    /* Vert : D (300, 30), E (300, 190), F (125, 170) ; rotation autour
+       d'un axe parallèle à x, en y = 110. */
+    glLoadIdentity();
+    glTranslatex(0, FIXED(2), FIXED(-400));
+    glRotatex(greenAngle, FIXED_ONE, 0, 0);
+    glTranslatex(0, FIXED(-2), FIXED(400));
+
+    glIndexub(GREEN);
+    glBegin(GL_TRIANGLES);
+    glVertex3x(FIXED(140), FIXED(82), FIXED(-400));
+    glVertex3x(FIXED(140), FIXED(-78), FIXED(-400));
+    glVertex3x(FIXED(-35), FIXED(-58), FIXED(-400));
+    glEnd();
 
     grBufferSwap(1);
 
-    /* Le côté AB du vert va et vient : A entre z = 3 et z = 7 */
-    greenA.z += dz;
-    greenB.z = greenA.z + GR_FIXED(2);
-    if (greenA.z <= GR_FIXED(3) || greenA.z >= GR_FIXED(7))
-      dz = -dz;
+    redAngle += GL_DEG(2);   /* un tour en 3 secondes */
+    greenAngle += GL_DEG(1); /* un tour en 6 secondes */
   }
 }
 

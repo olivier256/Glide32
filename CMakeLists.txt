@@ -10,9 +10,18 @@ set(MINIFB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(minifb)
 
+# tnl définit glBegin, glVertex3x... : si MiniFB se liait à OpenGL, nos
+# fonctions prendraient silencieusement la place des vraies. Sur macOS,
+# MiniFB utilise Metal (ou Cocoa seul), jamais OpenGL : on le vérifie.
+if(MINIFB_USE_OPENGL_API OR USE_OPENGL_API)
+    message(FATAL_ERROR "MiniFB est configuré avec OpenGL : conflit de noms avec tnl (gl*)")
+endif()
+
 add_executable(pixel
     game.c
     glide.c
+    tnl.c
+    sintab.c
     vdp.c
     interface.c
     sh2.c
