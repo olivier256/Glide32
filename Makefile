@@ -1,4 +1,4 @@
-.PHONY: all clean rebuild
+.PHONY: all clean rebuild run
 
 all:
 	cmake -S . -B build

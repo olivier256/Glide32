@@ -11,10 +11,12 @@ set(MINIFB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(minifb)
 
 add_executable(pixel
-	game.c
+    game.c
+    glide.c
     vdp.c
+    interface.c
+    sh2.c
     platform_minifb.c
-	interface.c
 )
 
 target_compile_options(pixel PRIVATE -Wall -Wextra)
