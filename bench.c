@@ -95,7 +95,7 @@ static void drawBatch(const Test *t, unsigned long first, int screenHeight) {
     /* Mêmes triangles, décrits en 3D à z = -400 (un pixel par unité),
        avec une vraie matrice : une rotation nulle n'en coûte pas moins. */
     glLoadIdentity();
-    glRotatex(0, 0, FIXED_ONE, 0);
+    glRotate(0, 0, FIXED_ONE, 0);
 
     glBegin(GL_TRIANGLES);
     for (int i = 0; i < BATCH; i++) {
@@ -104,9 +104,9 @@ static void drawBatch(const Test *t, unsigned long first, int screenHeight) {
 
       const GLfixed x0 = FIXED(x - VDP_SCREEN_WIDTH / 2);
       const GLfixed y0 = FIXED(screenHeight / 2 - y);
-      glVertex3x(x0, y0, FIXED(-400));
-      glVertex3x(x0 + FIXED(s), y0, FIXED(-400));
-      glVertex3x(x0, y0 - FIXED(s), FIXED(-400));
+      glVertex3(x0, y0, FIXED(-400));
+      glVertex3(x0 + FIXED(s), y0, FIXED(-400));
+      glVertex3(x0, y0 - FIXED(s), FIXED(-400));
     }
     glEnd();
   }
@@ -167,7 +167,7 @@ void master_main(void) {
   interface_write_intmask(interface_read_intmask() | INTMASK_V);
 
   glViewport(0, 0, VDP_SCREEN_WIDTH, h);
-  glFrustumx(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
+  glFrustum(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
              FIXED(300), FIXED(1000));
 
   /* Les lignes du master en rouge, celles du slave en vert : on voit

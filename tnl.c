@@ -46,7 +46,7 @@ void glViewport(int x, int y, int width, int height) {
   updateScale();
 }
 
-void glFrustumx(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top,
+void glFrustum(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top,
                 GLfixed near, GLfixed far) {
   (void)far; /* pas encore de plan lointain */
 
@@ -98,13 +98,13 @@ void glLoadIdentity(void) {
       modelview[i][j] = (i == j) ? FIXED_ONE : 0;
 }
 
-void glTranslatex(GLfixed x, GLfixed y, GLfixed z) {
+void glTranslate(GLfixed x, GLfixed y, GLfixed z) {
   const Matrix t = {
       {FIXED_ONE, 0, 0, x}, {0, FIXED_ONE, 0, y}, {0, 0, FIXED_ONE, z}};
   multiplyRight(t);
 }
 
-void glScalex(GLfixed x, GLfixed y, GLfixed z) {
+void glScale(GLfixed x, GLfixed y, GLfixed z) {
   const Matrix s = {{x, 0, 0, 0}, {0, y, 0, 0}, {0, 0, z, 0}};
   multiplyRight(s);
 }
@@ -128,7 +128,7 @@ static uint64_t isqrt64(uint64_t v) {
   return result;
 }
 
-void glRotatex(GLangle angle, GLfixed x, GLfixed y, GLfixed z) {
+void glRotate(GLangle angle, GLfixed x, GLfixed y, GLfixed z) {
   /* Axe normé : longueur = racine de (x² + y² + z²), en 16.16 */
   const uint64_t sq = (uint64_t)((int64_t)x * x) + (uint64_t)((int64_t)y * y) +
                       (uint64_t)((int64_t)z * z);
@@ -209,7 +209,7 @@ void glBegin(GLenum mode) {
   vertexCount = 0;
 }
 
-void glVertex3x(GLfixed x, GLfixed y, GLfixed z) {
+void glVertex3(GLfixed x, GLfixed y, GLfixed z) {
   const GLfixed *m0 = modelview[0];
   const GLfixed *m1 = modelview[1];
   const GLfixed *m2 = modelview[2];

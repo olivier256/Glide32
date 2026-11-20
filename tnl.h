@@ -11,14 +11,15 @@
    l'application sur le CPU hôte d'un PC équipé d'une Voodoo.
 
    Écarts volontaires avec OpenGL 1.x :
-   - virgule fixe 16.16 partout (GLfixed), comme OpenGL ES 1.x : les
-     fonctions portent le suffixe « x » (glVertex3x, glRotatex...) ;
-   - les angles sont en unités binaires, 65536 par tour (GL_DEG pour
-     convertir des degrés), et non en degrés ;
+   - virgule fixe 16.16 partout (GLfixed). Les fonctions n'ont donc pas
+     de suffixe de type : glVertex3, glRotate, glTranslate... au lieu de
+     glVertex3f, glRotatef, glTranslatef ;
+   - les angles sont en unités binaires, 65536 par tour, et non en
+     degrés. GL_DEG fait la traduction ;
    - les couleurs sont des index de palette (mode « color index »
      d'OpenGL : glIndexub) ;
    - une seule matrice de modélisation (modelview) ; la projection est
-     fixée par glFrustumx, sans matrice (pas de glMatrixMode) ;
+     fixée par glFrustum, sans matrice (pas de glMatrixMode) ;
    - glViewport compte y depuis le HAUT de l'écran ;
    - pas encore de découpage par le plan proche : tout sommet doit rester
      au-delà du plan proche (-z >= near). Le plan lointain n'est pas
@@ -37,6 +38,8 @@ typedef int GLenum;
 /* Angle : 65536 unités par tour (comme ANGLE dans la SGL de la Saturn) */
 typedef int32_t GLangle;
 
+/* Traduction degrés -> unités binaires, pour un nombre entier de degrés
+   (GL_DEG(90) = 16384), calculée à la compilation pour une constante */
 #define GL_DEG(d) ((GLangle)((d) * 65536 / 360))
 
 /* Primitives de glBegin */
@@ -50,29 +53,29 @@ typedef int32_t GLangle;
 /* Zone de l'écran où l'on dessine, en pixels (y depuis le haut). */
 void glViewport(int x, int y, int width, int height);
 
-/* Pyramide de vue, comme glFrustum : left, right, bottom, top sont les
+/* Pyramide de vue, comme le glFrustum d'OpenGL : left, right, bottom, top sont les
    bords de la fenêtre sur le plan proche, à la distance near de l'œil.
    far est mémorisé mais pas encore utilisé.
    Le z-buffer reçoit ooz = 65535 * near / distance : 65535 sur le plan
    proche. Pour la précision, placer near aussi loin que la scène le
    permet. */
-void glFrustumx(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top,
+void glFrustum(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top,
                 GLfixed near, GLfixed far);
 
 /* ---- Matrice de modélisation -------------------------------------------
    Chaque fonction multiplie la matrice courante PAR LA DROITE : sur les
    sommets, le dernier appel s'applique en premier. Pour tourner autour
    d'un axe qui passe par le point P :
-       glTranslatex(P);  glRotatex(...);  glTranslatex(-P);           */
+       glTranslate(P);  glRotate(...);  glTranslate(-P);           */
 
 void glLoadIdentity(void);
-void glTranslatex(GLfixed x, GLfixed y, GLfixed z);
-void glScalex(GLfixed x, GLfixed y, GLfixed z);
+void glTranslate(GLfixed x, GLfixed y, GLfixed z);
+void glScale(GLfixed x, GLfixed y, GLfixed z);
 
 /* Rotation de angle autour de l'axe (x, y, z), qui n'a pas besoin d'être
    normé. Sens direct : de y vers z autour de x, de z vers x autour de y,
-   de x vers y autour de z, comme glRotate. */
-void glRotatex(GLangle angle, GLfixed x, GLfixed y, GLfixed z);
+   de x vers y autour de z, comme le glRotatef d'OpenGL. */
+void glRotate(GLangle angle, GLfixed x, GLfixed y, GLfixed z);
 
 void glPushMatrix(void);
 void glPopMatrix(void);
@@ -85,7 +88,7 @@ void glIndexub(GLubyte index);
 /* Seul GL_TRIANGLES est prévu : chaque groupe de trois sommets donne un
    triangle, transformé, projeté, puis envoyé à grDrawTriangle(). */
 void glBegin(GLenum mode);
-void glVertex3x(GLfixed x, GLfixed y, GLfixed z);
+void glVertex3(GLfixed x, GLfixed y, GLfixed z);
 void glEnd(void);
 
 /* ---- Trigonométrie --------------------------------------------------------

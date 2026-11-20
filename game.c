@@ -59,7 +59,7 @@ void master_main(void) {
      si bien qu'à 400 de l'œil, une unité fait exactement un pixel. */
   const int h = vdp_screen_height();
   glViewport(0, 0, VDP_SCREEN_WIDTH, h);
-  glFrustumx(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
+  glFrustum(-FIXED(120), FIXED(120), -FIXED(3 * h) / 8, FIXED(3 * h) / 8,
              FIXED(300), FIXED(1000));
 
   /* Les triangles de l'énoncé, donnés en pixels (x, y vers le bas) à
@@ -74,29 +74,29 @@ void master_main(void) {
     /* Rouge : A (100, 50), B (100, 150), C (200, 100) ; rotation autour
        d'un axe parallèle à y, en x = 150, z = profondeur de la scène. */
     glLoadIdentity();
-    glTranslatex(FIXED(-10), 0, FIXED(-400)); /* 3. axe remis en place */
-    glRotatex(redAngle, 0, FIXED_ONE, 0);     /* 2. rotation autour de y */
-    glTranslatex(FIXED(10), 0, FIXED(400));   /* 1. axe ramené à l'origine */
+    glTranslate(FIXED(-10), 0, FIXED(-400)); /* 3. axe remis en place */
+    glRotate(redAngle, 0, FIXED_ONE, 0);     /* 2. rotation autour de y */
+    glTranslate(FIXED(10), 0, FIXED(400));   /* 1. axe ramené à l'origine */
 
     glIndexub(RED);
     glBegin(GL_TRIANGLES);
-    glVertex3x(FIXED(-60), FIXED(62), FIXED(-400));
-    glVertex3x(FIXED(-60), FIXED(-38), FIXED(-400));
-    glVertex3x(FIXED(40), FIXED(12), FIXED(-400));
+    glVertex3(FIXED(-60), FIXED(62), FIXED(-400));
+    glVertex3(FIXED(-60), FIXED(-38), FIXED(-400));
+    glVertex3(FIXED(40), FIXED(12), FIXED(-400));
     glEnd();
 
     /* Vert : D (300, 30), E (300, 190), F (125, 170) ; rotation autour
        d'un axe parallèle à x, en y = 110. */
     glLoadIdentity();
-    glTranslatex(0, FIXED(2), FIXED(-400));
-    glRotatex(greenAngle, FIXED_ONE, 0, 0);
-    glTranslatex(0, FIXED(-2), FIXED(400));
+    glTranslate(0, FIXED(2), FIXED(-400));
+    glRotate(greenAngle, FIXED_ONE, 0, 0);
+    glTranslate(0, FIXED(-2), FIXED(400));
 
     glIndexub(GREEN);
     glBegin(GL_TRIANGLES);
-    glVertex3x(FIXED(140), FIXED(82), FIXED(-400));
-    glVertex3x(FIXED(140), FIXED(-78), FIXED(-400));
-    glVertex3x(FIXED(-35), FIXED(-58), FIXED(-400));
+    glVertex3(FIXED(140), FIXED(82), FIXED(-400));
+    glVertex3(FIXED(140), FIXED(-78), FIXED(-400));
+    glVertex3(FIXED(-35), FIXED(-58), FIXED(-400));
     glEnd();
 
     grBufferSwap(1);
