@@ -28,11 +28,47 @@ void slave_vint(void) {
   slaveVInts++;
 }
 
+/* ---- Projection -----------------------------------------------------------
+   Glide ne projette pas : c'est au jeu de passer de la 3D à l'écran.
+   Repère de la caméra : x vers la droite, y vers le haut, z vers l'avant
+   (la caméra est à l'origine et regarde vers les z positifs).
+   Tout est en 16.16. */
+
+typedef struct {
+  GrFixed x, y, z;
+} Vec3;
+
+/* Distance focale en pixels : 160 donne 90 degrés d'angle horizontal */
+#define FOCAL 160
+
+/* Plan proche : ooz vaut 65535 à cette distance. Pas encore de découpage :
+   tous les points doivent rester à z >= NEAR_Z. */
+#define NEAR_Z GR_FIXED(2)
+
+static int screenHeight;
+
+static void project(const Vec3 *v, GrVertex *out) {
+  const int64_t z = v->z;
+
+  /* x_écran = centre + FOCAL * x / z ; y inversé (l'écran descend) */
+  out->x = GR_FIXED(VDP_SCREEN_WIDTH / 2) +
+           (GrFixed)(((int64_t)v->x * FOCAL * GR_FIXED_ONE) / z);
+  out->y = GR_FIXED(screenHeight / 2) -
+           (GrFixed)(((int64_t)v->y * FOCAL * GR_FIXED_ONE) / z);
+
+  /* ooz = 65535 * NEAR_Z / z, en 16.16 */
+  int64_t ooz = ((int64_t)65535 * NEAR_Z * GR_FIXED_ONE) / z;
+  if (ooz > (int64_t)GR_DEPTH(65535))
+    ooz = GR_DEPTH(65535);
+  out->ooz = (GrDepth)ooz;
+}
+
 /* ---- Master ------------------------------------------------------------ */
 
 void master_main(void) {
   /* VDP, FIFO, et libération du slave */
   grSstWinOpen();
+  screenHeight = vdp_screen_height();
 
   /* Palette (BGR 5:5:5) */
   vdp_palette[BLACK] = 0x0000;
@@ -53,40 +89,46 @@ void master_main(void) {
   grDepthBufferFunction(GR_CMP_GREATER);
   grDepthMask(1);
 
-  /* Deux triangles qui se traversent :
-     - le rouge est proche à gauche et s'éloigne vers la droite ;
-     - le vert est lointain à gauche, et sa profondeur à droite varie,
-       ce qui déplace la ligne d'intersection. */
-  GrVertex r0 = {GR_FIXED(30), GR_FIXED(30), GR_DEPTH(60000)};
-  GrVertex r1 = {GR_FIXED(30), GR_FIXED(190), GR_DEPTH(60000)};
-  GrVertex r2 = {GR_FIXED(290), GR_FIXED(110), GR_DEPTH(10000)};
+  /* Deux triangles en 3D qui se traversent :
+     - le rouge : côté vertical AB à gauche et proche, sommet C au fond ;
+     - le vert : côté AB à droite, qui avance et recule en z, sommet C au
+       fond à gauche. Son côté AB est incliné en profondeur (B est 2 plus
+       loin que A) : sinon, les deux plans contiendraient la verticale, et
+       leur intersection serait une droite verticale. */
+  const Vec3 redA = {GR_FIXED(-3), GR_FIXED(2), GR_FIXED(4)};
+  const Vec3 redB = {GR_FIXED(-3), GR_FIXED(-2), GR_FIXED(4)};
+  const Vec3 redC = {GR_FIXED(3), GR_FIXED(0), GR_FIXED(10)};
 
-  GrVertex g0 = {GR_FIXED(290), GR_FIXED(50), GR_DEPTH(40000)};
-  GrVertex g1 = {GR_FIXED(290), GR_FIXED(210), GR_DEPTH(40000)};
-  GrVertex g2 = {GR_FIXED(30), GR_FIXED(130), GR_DEPTH(10000)};
+  Vec3 greenA = {GR_FIXED(5) / 2, GR_FIXED(2), GR_FIXED(3)};
+  Vec3 greenB = {GR_FIXED(5) / 2, GR_FIXED(-2), GR_FIXED(5)};
+  const Vec3 greenC = {GR_FIXED(-3), GR_FIXED(0), GR_FIXED(10)};
 
-  const GrDepth step = GR_DEPTH(200);
-  int closer = 1;
+  GrFixed dz = GR_FIXED_ONE / 32; /* par image */
 
   while (platform_running()) {
+    GrVertex a, b, c;
+
     grBufferClear(BLACK, 0);
 
     grConstantColorValue(RED);
-    grDrawTriangle(&r0, &r1, &r2);
+    project(&redA, &a);
+    project(&redB, &b);
+    project(&redC, &c);
+    grDrawTriangle(&a, &b, &c);
 
     grConstantColorValue(GREEN);
-    grDrawTriangle(&g0, &g1, &g2);
+    project(&greenA, &a);
+    project(&greenB, &b);
+    project(&greenC, &c);
+    grDrawTriangle(&a, &b, &c);
 
     grBufferSwap(1);
 
-    /* Le côté droit du vert avance et recule entre 15000 et 60000 */
-    if (closer)
-      g0.ooz += step;
-    else
-      g0.ooz -= step;
-    g1.ooz = g0.ooz;
-    if (g0.ooz <= GR_DEPTH(15000) || g0.ooz >= GR_DEPTH(60000))
-      closer = !closer;
+    /* Le côté AB du vert va et vient : A entre z = 3 et z = 7 */
+    greenA.z += dz;
+    greenB.z = greenA.z + GR_FIXED(2);
+    if (greenA.z <= GR_FIXED(3) || greenA.z >= GR_FIXED(7))
+      dz = -dz;
   }
 }
 
