@@ -16,8 +16,8 @@
    Glide ne transforme rien : les sommets arrivent en coordonnées écran.
 
    Toutes les fonctions gr* sont réservées au master, sauf grSlaveLoop().
-   La FIFO (et plus tard le z-buffer) sont des variables statiques de
-   glide.c : sur 32X, l'éditeur de liens les place en SDRAM.
+   La FIFO et le z-buffer (320 x 240 x 16 bits, 150 Ko) sont des variables
+   statiques de glide.c : sur 32X, l'éditeur de liens les place en SDRAM.
 
    Registres COMM : comme pour la BootROM, comm[0] et comm[1] appartiennent
    au master, comm[2] et comm[3] au slave. Chaque CPU ne fait que LIRE les
@@ -46,6 +46,14 @@ typedef int32_t GrFixed;
    (remplace GrColor_t, qui est en RGBA 32 bits dans Glide). */
 typedef uint8_t GrColor_t;
 
+/* Profondeur : 1/z en virgule fixe 16.16 non signée, dans [0 ; 65535].
+   Glide appelle ce paramètre « z », mais c'est bien 1/z (ooz) : seul 1/z
+   varie linéairement à l'écran. Typiquement ooz = 65535 / z, avec z >= 1
+   au plan proche. Plus ooz est grand, plus le point est proche. */
+typedef uint32_t GrDepth;
+
+#define GR_DEPTH(i) ((GrDepth)(i) << 16)
+
 /* Sommet en coordonnées écran, origine en haut à gauche (équivalent de
    grSstOrigin(GR_ORIGIN_UPPER_LEFT), seule origine prévue).
    Le centre du pixel (x, y) est en (x + 0,5 ; y + 0,5).
@@ -55,8 +63,27 @@ typedef uint8_t GrColor_t;
 typedef struct {
   GrFixed x;
   GrFixed y;
-  /* GrFixed z;  plus tard, avec le z-buffer */
+  GrDepth ooz; /* pour le z-buffer ; ignoré sans tampon de profondeur */
+  /* GrFixed oow;  plus tard, pour le w-buffer */
 } GrVertex;
+
+/* Modes du tampon de profondeur (grDepthBufferMode) */
+typedef int GrDepthBufferMode_t;
+#define GR_DEPTHBUFFER_DISABLE 0 /* par défaut */
+#define GR_DEPTHBUFFER_ZBUFFER 1 /* z-buffer 16 bits : partie entière de ooz */
+/* #define GR_DEPTHBUFFER_WBUFFER 2   plus tard : flottant 16 bits de oow */
+
+/* Fonctions de comparaison (grDepthBufferFunction), mêmes valeurs que Glide.
+   Le test passe si : profondeur du pixel <fonction> profondeur stockée. */
+typedef int GrCmpFnc_t;
+#define GR_CMP_NEVER 0
+#define GR_CMP_LESS 1 /* par défaut */
+#define GR_CMP_EQUAL 2
+#define GR_CMP_LEQUAL 3
+#define GR_CMP_GREATER 4
+#define GR_CMP_NOTEQUAL 5
+#define GR_CMP_GEQUAL 6
+#define GR_CMP_ALWAYS 7
 
 /* ---- Ouverture --------------------------------------------------------- */
 
@@ -83,14 +110,30 @@ void grConstantColorValue(GrColor_t color);
    sont tracés. Ramenée à l'écran si elle déborde. Par défaut : l'écran. */
 void grClipWindow(int minx, int miny, int maxx, int maxy);
 
+/* Active le tampon de profondeur. Par défaut : GR_DEPTHBUFFER_DISABLE. */
+void grDepthBufferMode(GrDepthBufferMode_t mode);
+
+/* Fonction de comparaison. Par défaut : GR_CMP_LESS, comme Glide.
+   ATTENTION : avec le z-buffer, ooz DIMINUE quand z augmente ; il faut
+   donc GR_CMP_GREATER et un effacement à 0 (exemple 7.1 du guide Glide).
+   GR_CMP_LESS convient au futur w-buffer, où les grandes valeurs sont
+   lointaines. */
+void grDepthBufferFunction(GrCmpFnc_t function);
+
+/* Autorise (enable != 0, par défaut) ou interdit l'écriture dans le tampon
+   de profondeur. Le test a lieu dans les deux cas. */
+void grDepthMask(int enable);
+
 /* ---- Tracé (commandes de la FIFO) -------------------------------------- */
 
-/* Efface la fenêtre de découpage du back buffer.
-   depth est ignoré tant qu'il n'y a pas de z-buffer.
-   (Glide : grBufferClear(color, alpha, depth) ; pas d'alpha ici.) */
+/* Efface la fenêtre de découpage du back buffer, et celle du tampon de
+   profondeur s'il est actif et que son écriture est autorisée (grDepthMask).
+   depth est la valeur écrite dans le z-buffer (0 = le plus lointain avec
+   ooz). (Glide : grBufferClear(color, alpha, depth) ; pas d'alpha ici.) */
 void grBufferClear(GrColor_t color, uint16_t depth);
 
-/* Trace un triangle plein, à la couleur courante.
+/* Trace un triangle plein, à la couleur courante, avec le test de
+   profondeur si le z-buffer est actif (ooz interpolé sur le triangle).
    Les sommets sont copiés dans la FIFO : l'appelant peut les réutiliser
    dès le retour. Règle de remplissage de Glide : un pixel est tracé si son
    centre est dans le triangle ; arêtes gauches et hautes incluses, droites

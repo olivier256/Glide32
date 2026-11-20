@@ -4,6 +4,7 @@
 #include "sh2.h"
 #include "vdp.h"
 
+
 /* =========================================================================
    Registres COMM (voir glide.h)
    ========================================================================= */
@@ -34,13 +35,29 @@ static uint16_t writePos = 0; /* position d'écriture, propre au master */
 
 /* Commandes. Chacune commence par son code, suivi de ses paramètres. */
 enum {
-  CMD_WRAP = 1,  /* retour au début de l'anneau                  1 mot  */
-  CMD_COLOR,     /* couleur                                      2 mots */
-  CMD_CLIP,      /* minx, miny, maxx, maxy                       5 mots */
-  CMD_CLEAR,     /* couleur, profondeur                          3 mots */
-  CMD_TRIANGLE,  /* ax, ay, bx, by, cx, cy                       7 mots */
-  CMD_SLI_DEBUG  /* actif, couleur master, couleur slave         4 mots */
+  CMD_WRAP = 1,   /* retour au début de l'anneau                 1 mot   */
+  CMD_COLOR,      /* couleur                                     2 mots  */
+  CMD_CLIP,       /* minx, miny, maxx, maxy                      5 mots  */
+  CMD_DEPTH_MODE, /* mode                                        2 mots  */
+  CMD_DEPTH_FUNC, /* fonction de comparaison                     2 mots  */
+  CMD_DEPTH_MASK, /* écriture autorisée                          2 mots  */
+  CMD_CLEAR,      /* couleur, profondeur                         3 mots  */
+  CMD_TRIANGLE,   /* ax, ay, aooz, bx, by, booz, cx, cy, cooz    10 mots */
+  CMD_SLI_DEBUG   /* actif, couleur master, couleur slave        4 mots  */
 };
+
+/* =========================================================================
+   Z-buffer, en SDRAM
+
+   Une ligne de 320 mots par ligne d'écran, dimensionné pour le mode
+   240 lignes. Il contient la partie entière de ooz. Chaque CPU ne lit et
+   n'écrit que ses propres lignes : aucune synchronisation.
+   Lu et écrit seulement par les CPU, par mots : pas de BE16.
+   ========================================================================= */
+
+#define ZBUFFER_LINES 240
+
+static uint16_t zbuffer[ZBUFFER_LINES * VDP_SCREEN_WIDTH];
 
 /* =========================================================================
    Rasteriseur : un par CPU, chacun avec ses états et sa parité de lignes
@@ -50,6 +67,9 @@ typedef struct {
   int parity; /* 0 : lignes paires (master), 1 : impaires (slave) */
   GrColor_t color;
   int clipMinX, clipMinY, clipMaxX, clipMaxY;
+  GrDepthBufferMode_t depthMode;
+  GrCmpFnc_t depthFunc;
+  int depthMask;
   int sliDebug;
   GrColor_t sliColor[2];
 } Rasterizer;
@@ -59,7 +79,7 @@ static Rasterizer slaveRaster;
 
 static void resetRasterizer(Rasterizer *r, int parity);
 static int execute(Rasterizer *r, const uint32_t *cmd);
-static void clearBuffer(const Rasterizer *r, GrColor_t color);
+static void clearBuffer(const Rasterizer *r, GrColor_t color, uint16_t depth);
 static void drawTriangle(const Rasterizer *r, const uint32_t *v);
 
 static uint32_t *reserve(int count);
@@ -165,6 +185,27 @@ void grClipWindow(int minx, int miny, int maxx, int maxy) {
   submit(5);
 }
 
+void grDepthBufferMode(GrDepthBufferMode_t mode) {
+  uint32_t *p = reserve(2);
+  *p++ = CMD_DEPTH_MODE;
+  *p = (uint32_t)mode;
+  submit(2);
+}
+
+void grDepthBufferFunction(GrCmpFnc_t function) {
+  uint32_t *p = reserve(2);
+  *p++ = CMD_DEPTH_FUNC;
+  *p = (uint32_t)function;
+  submit(2);
+}
+
+void grDepthMask(int enable) {
+  uint32_t *p = reserve(2);
+  *p++ = CMD_DEPTH_MASK;
+  *p = enable ? 1 : 0;
+  submit(2);
+}
+
 void grBufferClear(GrColor_t color, uint16_t depth) {
   uint32_t *p = reserve(3);
   *p++ = CMD_CLEAR;
@@ -174,15 +215,18 @@ void grBufferClear(GrColor_t color, uint16_t depth) {
 }
 
 void grDrawTriangle(const GrVertex *a, const GrVertex *b, const GrVertex *c) {
-  uint32_t *p = reserve(7);
+  uint32_t *p = reserve(10);
   *p++ = CMD_TRIANGLE;
   *p++ = (uint32_t)a->x;
   *p++ = (uint32_t)a->y;
+  *p++ = a->ooz;
   *p++ = (uint32_t)b->x;
   *p++ = (uint32_t)b->y;
+  *p++ = b->ooz;
   *p++ = (uint32_t)c->x;
-  *p = (uint32_t)c->y;
-  submit(7);
+  *p++ = (uint32_t)c->y;
+  *p = c->ooz;
+  submit(10);
 }
 
 void grSliDebug(int enable, GrColor_t masterColor, GrColor_t slaveColor) {
@@ -286,6 +330,9 @@ static void resetRasterizer(Rasterizer *r, int parity) {
   r->clipMinY = 0;
   r->clipMaxX = VDP_SCREEN_WIDTH;
   r->clipMaxY = vdp_screen_height();
+  r->depthMode = GR_DEPTHBUFFER_DISABLE;
+  r->depthFunc = GR_CMP_LESS;
+  r->depthMask = 1;
   r->sliDebug = 0;
   r->sliColor[0] = 0;
   r->sliColor[1] = 0;
@@ -305,13 +352,25 @@ static int execute(Rasterizer *r, const uint32_t *cmd) {
     r->clipMaxY = (int)cmd[4];
     return 5;
 
+  case CMD_DEPTH_MODE:
+    r->depthMode = (GrDepthBufferMode_t)cmd[1];
+    return 2;
+
+  case CMD_DEPTH_FUNC:
+    r->depthFunc = (GrCmpFnc_t)cmd[1];
+    return 2;
+
+  case CMD_DEPTH_MASK:
+    r->depthMask = (int)cmd[1];
+    return 2;
+
   case CMD_CLEAR:
-    clearBuffer(r, (GrColor_t)cmd[1]);
+    clearBuffer(r, (GrColor_t)cmd[1], (uint16_t)cmd[2]);
     return 3;
 
   case CMD_TRIANGLE:
     drawTriangle(r, cmd + 1);
-    return 7;
+    return 10;
 
   case CMD_SLI_DEBUG:
     r->sliDebug = (int)cmd[1];
@@ -347,9 +406,37 @@ static void fillSpan(int y, int x0, int x1, GrColor_t color) {
     *p++ = color;
 }
 
-static void clearBuffer(const Rasterizer *r, GrColor_t color) {
-  for (int y = firstOwnLine(r, r->clipMinY); y < r->clipMaxY; y += 2)
+static void clearBuffer(const Rasterizer *r, GrColor_t color, uint16_t depth) {
+  const int clearDepth = r->depthMode != GR_DEPTHBUFFER_DISABLE && r->depthMask;
+
+  for (int y = firstOwnLine(r, r->clipMinY); y < r->clipMaxY; y += 2) {
     fillSpan(y, r->clipMinX, r->clipMaxX, color);
+
+    if (clearDepth) {
+      uint16_t *z = zbuffer + y * VDP_SCREEN_WIDTH + r->clipMinX;
+      uint16_t *end = z + (r->clipMaxX - r->clipMinX);
+      while (z < end)
+        *z++ = depth;
+    }
+  }
+}
+
+/* ---- Divisions -------------------------------------------------------- */
+
+/* Division arrondie vers le bas (b > 0) */
+static int64_t floorDiv(int64_t a, int64_t b) {
+  int64_t q = a / b;
+  if (a % b < 0)
+    q--;
+  return q;
+}
+
+static int64_t clamp64(int64_t v, int64_t limit) {
+  if (v > limit)
+    return limit;
+  if (v < -limit)
+    return -limit;
+  return v;
 }
 
 /* ---- Arêtes ---------------------------------------------------------------
@@ -360,65 +447,150 @@ static void clearBuffer(const Rasterizer *r, GrColor_t color) {
    Son x sur la ligne y vaut : xFirst + (y - firstLine) * slope.
    - xFirst est calculé (division 64 bits) sur sa première ligne ;
    - slope est la pente en 16.16 (pixels par ligne).
+   Ce x ne dépend que des deux sommets de l'arête et de la ligne : deux
+   triangles qui partagent une arête trouvent exactement le même x, et la
+   règle « gauche incluse, droite exclue » attribue chaque pixel à un seul
+   d'entre eux. C'est pour cela qu'on ne recalcule pas x à partir d'une
+   autre ligne de départ.
    Les deux divisions arrondissent vers le bas : le x calculé n'est jamais
    à droite du x exact. Quand un centre de pixel tombe exactement sur
    l'arête, il reste donc dedans pour une arête gauche (incluse) et dehors
    pour une arête droite (exclue), comme le veut la règle. Arrondir vers
    zéro, comme le fait la division du C, se trompe une fois sur deux.
-   Ce x ne dépend que des deux sommets de l'arête et de la ligne : deux
-   triangles qui partagent une arête trouvent exactement le même x, et la
-   règle « gauche incluse, droite exclue » attribue chaque pixel à un seul
-   d'entre eux. C'est pour cela qu'on ne recalcule pas x à partir d'une
-   autre ligne de départ. */
+
+   L'arête porte aussi ooz, de la même façon (oozFirst, oozSlope). */
 
 typedef struct {
   int firstLine; /* première ligne couverte */
   int endLine;   /* ligne qui suit la dernière couverte */
   GrFixed xFirst;
   GrFixed slope;
+  int64_t oozFirst; /* ooz sur la première ligne, 16.15 (voir plus bas) */
+  int64_t oozSlope; /* variation de ooz par ligne, 16.15 */
 } Edge;
-
-/* Division arrondie vers le bas (b > 0) */
-static int64_t floorDiv(int64_t a, int64_t b) {
-  int64_t q = a / b;
-  if (a % b < 0)
-    q--;
-  return q;
-}
 
 static void edgeInit(Edge *e, const GrVertex *top, const GrVertex *bottom) {
   e->firstLine = ceilFixed(top->y - GR_FIXED_HALF);
   e->endLine = ceilFixed(bottom->y - GR_FIXED_HALF);
   e->xFirst = top->x;
   e->slope = 0;
+  e->oozFirst = top->ooz >> 1;
+  e->oozSlope = 0;
 
   if (e->firstLine >= e->endLine)
     return; /* aucune ligne : arête (presque) horizontale */
 
   const int64_t dx = (int64_t)bottom->x - top->x;
   const int64_t dy = (int64_t)bottom->y - top->y; /* > 0 */
+  const int64_t dooz = (int64_t)(bottom->ooz >> 1) - (top->ooz >> 1);
 
   /* Distance du sommet au centre de la première ligne */
   const int64_t ty = (int64_t)e->firstLine * GR_FIXED_ONE + GR_FIXED_HALF - top->y;
   e->xFirst = (GrFixed)(top->x + floorDiv(ty * dx, dy));
+  e->oozFirst += floorDiv(ty * dooz, dy);
 
-  /* Une arête de moins d'un pixel de haut couvre au plus une ligne : sa
-     pente ne sert pas, et peut dépasser 32 bits. On la borne. */
-  int64_t slope = floorDiv(dx * GR_FIXED_ONE, dy);
-  if (slope > (1 << 29))
-    slope = 1 << 29;
-  if (slope < -(1 << 29))
-    slope = -(1 << 29);
-  e->slope = (GrFixed)slope;
+  /* Une arête de moins d'un pixel de haut couvre au plus une ligne : ses
+     pentes ne servent pas, et peuvent être énormes. On les borne. */
+  e->slope = (GrFixed)clamp64(floorDiv(dx * GR_FIXED_ONE, dy), 1 << 29);
+  e->oozSlope = clamp64(floorDiv(dooz * GR_FIXED_ONE, dy), (int64_t)1 << 40);
 }
 
 static GrFixed edgeX(const Edge *e, int y) {
   return (GrFixed)(e->xFirst + (int64_t)(y - e->firstLine) * e->slope);
 }
 
-/* Trace les lignes [yStart, yEnd[ de ce CPU entre deux arêtes */
+static int64_t edgeOoz(const Edge *e, int y) {
+  return e->oozFirst + (int64_t)(y - e->firstLine) * e->oozSlope;
+}
+
+/* ---- Profondeur -----------------------------------------------------------
+   Sur un triangle, ooz varie linéairement : sur chaque ligne, il part de
+   sa valeur sur l'arête gauche (calculée comme x) et avance de gx par
+   pixel. gx est la même pour tout le triangle (une division par triangle).
+
+   Pourquoi partir de l'arête, et pas d'un sommet ? Un triangle très fin
+   (presque vu par la tranche) a une pente énorme dans le sens de sa
+   finesse. Calculée depuis un sommet lointain, la moindre erreur sur
+   cette pente est multipliée par la distance. Depuis l'arête gauche, le
+   premier pixel n'est jamais à plus d'un pixel (sauf découpage), et le
+   long d'une ligne la pente reste raisonnable, puisque les valeurs ne
+   sortent pas de celles des sommets.
+
+   En interne, ooz est en 16.15 signé (ooz / 2), en 64 bits : une petite
+   erreur d'arrondi sous 0 reste négative, au lieu de reboucler vers
+   65535 (le plus proche !). Le z-buffer reçoit la partie entière, bornée
+   à [0 ; 65535]. */
+
+/* Pente de ooz selon x, 16.15 par pixel. p : sommets triés ; cross :
+   produit vectoriel déjà calculé (32.32). */
+static int64_t depthSlopeX(const GrVertex *p, int64_t cross) {
+  const int64_t do1 = (int64_t)(p[1].ooz >> 1) - (p[0].ooz >> 1);
+  const int64_t do2 = (int64_t)(p[2].ooz >> 1) - (p[0].ooz >> 1);
+  const int64_t e1y = (int64_t)p[1].y - p[0].y;
+  const int64_t e2y = (int64_t)p[2].y - p[0].y;
+
+  /* Règle de Cramer. Ramené de 32.32 à 16.16, cross donne directement une
+     pente en 16.15 par pixel. */
+  int64_t den = cross >> 16;
+  int64_t num = do1 * e2y - do2 * e1y;
+
+  if (den == 0) /* moins de 1/65536 pixel carré : au plus un pixel */
+    return 0;
+  if (den < 0) {
+    den = -den;
+    num = -num;
+  }
+  return clamp64(floorDiv(num, den), (int64_t)1 << 40);
+}
+
+static int depthTest(GrCmpFnc_t function, uint16_t z, uint16_t stored) {
+  switch (function) {
+  case GR_CMP_NEVER:    return 0;
+  case GR_CMP_LESS:     return z < stored;
+  case GR_CMP_EQUAL:    return z == stored;
+  case GR_CMP_LEQUAL:   return z <= stored;
+  case GR_CMP_GREATER:  return z > stored;
+  case GR_CMP_NOTEQUAL: return z != stored;
+  case GR_CMP_GEQUAL:   return z >= stored;
+  default:              return 1; /* GR_CMP_ALWAYS */
+  }
+}
+
+/* Remplit les pixels [x0, x1[ de la ligne y qui passent le test de
+   profondeur. ooz : valeur au centre du pixel x0 ; gx : pente. */
+static void depthSpan(const Rasterizer *r, int y, int x0, int x1,
+                      GrColor_t color, int64_t ooz, int64_t gx) {
+  uint8_t *p = (uint8_t *)vdp_dram + vdp_dram[y] * 2 + x0;
+  uint16_t *zp = zbuffer + y * VDP_SCREEN_WIDTH + x0;
+
+  for (int n = x1 - x0; n > 0; n--) {
+    uint16_t z;
+    if (ooz < 0)
+      z = 0;
+    else if (ooz > 0x7FFFFFFF)
+      z = 0xFFFF;
+    else
+      z = (uint16_t)(ooz >> 15);
+
+    if (depthTest(r->depthFunc, z, *zp)) {
+      if (r->depthMask)
+        *zp = z;
+      *p = color;
+    }
+
+    p++;
+    zp++;
+    ooz += gx;
+  }
+}
+
+/* ---- Triangles ------------------------------------------------------------ */
+
+/* Trace les lignes [yStart, yEnd[ de ce CPU entre deux arêtes.
+   depth : avec le z-buffer ; gx : pente de ooz selon x. */
 static void drawSegment(const Rasterizer *r, int yStart, int yEnd,
-                        const Edge *left, const Edge *right, GrColor_t color) {
+                        const Edge *left, const Edge *right, GrColor_t color,
+                        int depth, int64_t gx) {
   if (yStart < r->clipMinY)
     yStart = r->clipMinY;
   if (yEnd > r->clipMaxY)
@@ -440,8 +612,17 @@ static void drawSegment(const Rasterizer *r, int yStart, int yEnd,
       x0 = r->clipMinX;
     if (x1 > r->clipMaxX)
       x1 = r->clipMaxX;
-    if (x0 < x1)
-      fillSpan(y, x0, x1, color);
+
+    if (x0 < x1) {
+      if (depth) {
+        /* ooz sur l'arête gauche, puis jusqu'au centre du pixel x0 */
+        const int64_t toPixel = (int64_t)x0 * GR_FIXED_ONE + GR_FIXED_HALF - xl;
+        const int64_t ooz = edgeOoz(left, y) + ((gx * toPixel) >> 16);
+        depthSpan(r, y, x0, x1, color, ooz, gx);
+      } else {
+        fillSpan(y, x0, x1, color);
+      }
+    }
 
     xl += stepL;
     xr += stepR;
@@ -453,6 +634,7 @@ static void drawTriangle(const Rasterizer *r, const uint32_t *v) {
   for (int i = 0; i < 3; i++) {
     p[i].x = (GrFixed)*v++;
     p[i].y = (GrFixed)*v++;
+    p[i].ooz = *v++;
   }
 
   /* Tri par y croissant : p0 en haut, p2 en bas */
@@ -475,12 +657,15 @@ static void drawTriangle(const Rasterizer *r, const uint32_t *v) {
 
   const GrColor_t color = r->sliDebug ? r->sliColor[r->parity] : r->color;
 
+  const int depth = r->depthMode == GR_DEPTHBUFFER_ZBUFFER;
+  const int64_t gx = depth ? depthSlopeX(p, cross) : 0;
+
   if (cross < 0) { /* p1 à gauche : les arêtes courtes sont à gauche */
-    drawSegment(r, upper.firstLine, upper.endLine, &upper, &longEdge, color);
-    drawSegment(r, lower.firstLine, lower.endLine, &lower, &longEdge, color);
+    drawSegment(r, upper.firstLine, upper.endLine, &upper, &longEdge, color, depth, gx);
+    drawSegment(r, lower.firstLine, lower.endLine, &lower, &longEdge, color, depth, gx);
   } else {
-    drawSegment(r, upper.firstLine, upper.endLine, &longEdge, &upper, color);
-    drawSegment(r, lower.firstLine, lower.endLine, &longEdge, &lower, color);
+    drawSegment(r, upper.firstLine, upper.endLine, &longEdge, &upper, color, depth, gx);
+    drawSegment(r, lower.firstLine, lower.endLine, &longEdge, &lower, color, depth, gx);
   }
 }
 
