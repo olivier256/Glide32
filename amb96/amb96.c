@@ -176,7 +176,6 @@ static void updateScene(Scene *scene, unsigned pad, int screenHeight) {
 
 static void drawScene(const Scene *scene, int cpu, int screenHeight) {
   const Screen screen = {
-      .pixels = fb_pixels(),
       .height = screenHeight,
       .firstLine = cpu, /* Master : lignes paires, Slave : impaires */
       .lineStep = PLATFORM_CPU_COUNT,
@@ -185,12 +184,12 @@ static void drawScene(const Scene *scene, int cpu, int screenHeight) {
   /* Fond. La ligne y de l'écran montre la ligne (scrollY + y) du plan :
      le plan B ne « saute » pas quand la séparation bouge. */
   for (int y = screen.firstLine; y < screenHeight; y += screen.lineStep) {
-    uint8_t *dst = screen.pixels + y * FB_WIDTH;
+    const uint32_t line = fb_offset(0, y);
     if (y < scene->splitLine)
-      plane_draw_line(dst, &asset_plane_a, &asset_tiles, scene->scrollAX,
+      plane_draw_line(line, &asset_plane_a, &asset_tiles, scene->scrollAX,
                       scene->scrollAY + y);
     else
-      plane_draw_line(dst, &asset_plane_b, &asset_tiles, scene->scrollBX,
+      plane_draw_line(line, &asset_plane_b, &asset_tiles, scene->scrollBX,
                       scene->scrollBY + y);
   }
 

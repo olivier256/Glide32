@@ -20,18 +20,26 @@
 /* Remplit la table de lignes du frame buffer de dessin */
 void fb_init_line_table(int screenHeight);
 
-/* Premier pixel de la ligne 0 du frame buffer de dessin.
-   vdp_dram change à chaque échange de frame buffer : appeler cette
-   fonction au début de chaque image, une fois l'échange effectué. */
-static inline uint8_t *fb_pixels(void) {
-  return (uint8_t *)vdp_dram + FB_LINE_TABLE_BYTES;
-}
+/* Toutes les écritures du moteur dans le frame buffer passent par
+   vdp_dram_write*() ou vdp_overwrite_write*(), pour être comptées par le
+   simulateur (voir vdp.h). Seule exception : la table de lignes, à
+   l'initialisation (voir framebuffer.c). */
 
 /* Position du pixel (x, y) en octets depuis le début du frame buffer de
-   dessin : c'est l'offset attendu par vdp_overwrite_write*(). */
+   dessin : c'est l'offset attendu par vdp_dram_write*() et
+   vdp_overwrite_write*(). */
 static inline uint32_t fb_offset(int x, int y) {
   return (uint32_t)(FB_LINE_TABLE_BYTES + y * FB_WIDTH + x);
 }
+
+/* Copie n octets de src dans le frame buffer de dessin, à partir de
+   l'offset 'offset' (zone normale), comme le ferait un memcpy ordinaire :
+   - par mots de 32 bits si source et destination ont le même alignement
+     modulo 4,
+   - sinon par mots de 16 bits si elles ont la même parité,
+   - sinon octet par octet.
+   C'est la copie de référence, à battre. */
+void fb_copy(uint32_t offset, const uint8_t *src, int n);
 
 /* Ce qu'un CPU dessine pendant une image : les lignes firstLine,
    firstLine + lineStep, firstLine + 2 * lineStep...
@@ -39,7 +47,6 @@ static inline uint32_t fb_offset(int x, int y) {
    Chaque CPU possède entièrement ses lignes (fond puis sprites) : aucun
    des deux n'a besoin d'attendre l'autre au milieu de l'image. */
 typedef struct {
-  uint8_t *pixels; /* ligne 0 */
   int height;
   int firstLine;
   int lineStep;

@@ -1,3 +1,13 @@
+On ajoute les compteurs.
+Lancer avec
+```
+VDP_STATS=1 make amb96
+# ou, une fois compilé :
+VDP_STATS=1 ./build/amb96
+```
+
+
+
 **Ce qui a changé**
 - **Une seule constante.** La taille des tiles est fixée par `TILE_SHIFT` dans `assets_types.h`, que lisent à la fois bmp2c et le moteur. Changer la taille ne demande plus de modifier deux endroits.
 - **Numéros de tile sur 16 bits.** Les deux plans n'utilisent que 198 tiles différentes, ce qui tiendrait sur un octet. Mais en 8 × 8, 256 tiles ne représentent que 16 Ko de graphismes, et un vrai décor dépasserait vite cette limite. Chaque plan de 1024 × 1024 devient une grille de 128 × 128 tiles, soit 32 Ko de numéros (au lieu de 1 Ko).

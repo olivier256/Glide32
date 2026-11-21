@@ -17,7 +17,8 @@
    Mêmes règles que platform_minifb.c (threads Master et Slave, balayage de
    262 lignes à 60 Hz en temps réel, V_INT par signal), mais l'image n'est
    pas affichée : certaines images sont enregistrées en PPM, et la manette
-   suit un scénario donné en ligne de commande.
+   suit un scénario donné en ligne de commande. Les compteurs d'écritures
+   dans le frame buffer sont affichés à chaque capture et à la fin.
 
    Usage :
      amb96_headless [--frames N] [--shot IMAGE:fichier.ppm]...
@@ -168,8 +169,12 @@ static void runVideo(void) {
       } else if (line == SCREEN_HEIGHT) {
         /* L'image 'frame' est complète : capture éventuelle */
         for (int i = 0; i < _shotCount; i++)
-          if (_shots[i].frame == frame)
+          if (_shots[i].frame == frame) {
             savePPM(_shots[i].path);
+            char label[32];
+            snprintf(label, sizeof label, "image %ld", frame);
+            vdp_print_write_stats(label);
+          }
 
         _vblankStartNs = start;
         vdp_begin_vblank();
@@ -263,6 +268,7 @@ int main(int argc, char *argv[]) {
       return 1;
 
   runVideo();
+  vdp_print_write_stats("fin");
 
   _running = 0;
   for (int cpu = 0; cpu < PLATFORM_CPU_COUNT; cpu++)

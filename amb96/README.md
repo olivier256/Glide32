@@ -56,6 +56,31 @@ ou Pillow (mode `P`) produisent ce format. Pour ajouter une image : la
 déposer dans `assets/`, l'ajouter au manifeste, puis l'utiliser sous le
 nom `asset_<nom>` (déclaré dans `amb96_assets.h`, généré).
 
+## Mesurer : compteurs d'écritures
+
+Le simulateur ne mesure pas le temps SH2, mais il compte les accès au
+frame buffer, ce qui coûte le plus sur 32X (bus 16 bits du VDP). Toutes
+les écritures du moteur passent par `vdp_dram_write8/16/32()` (zone
+normale) ou `vdp_overwrite_write8/16/32()` (zone overwrite), qui comptent
+par CPU, par taille et par zone, image par image. Une écriture 8 ou
+16 bits = un accès au bus ; une écriture 32 bits = deux.
+
+- Fenêtre : `VDP_STATS=1 ./build/amb96` (toutes les 5 secondes).
+- Sans fenêtre : à chaque `--shot` et à la fin.
+
+Repère : redessiner l'écran entier en écritures 16 bits demande
+35 840 accès (320 × 224 / 2). Mesures avec la copie de référence
+(`fb_copy`, qui copie comme un memcpy ordinaire) :
+
+| Défilement X des plans | Fond, accès bus | Sprites, accès bus |
+|------------------------|-----------------|--------------------|
+| multiple de 4          | 35 840 (32 bits) | 8 704 (16 bits)   |
+| pair                   | 35 840 (16 bits) | 8 704             |
+| impair                 | **71 680 (8 bits)** | 8 704          |
+
+Les sprites sont écrits sur tout leur rectangle, y compris les pixels
+transparents.
+
 ## Organisation du code
 
 | Fichier           | Rôle                                                       |

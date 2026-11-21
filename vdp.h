@@ -43,6 +43,50 @@ void vdp_overwrite_write8(uint32_t offset, uint8_t pixel);
 void vdp_overwrite_write16(uint32_t offset, uint16_t pixels);
 void vdp_overwrite_write32(uint32_t offset, uint32_t pixels);
 
+/* ---- Écritures normales ---------------------------------------------------
+   Mêmes règles que ci-dessus (offset, ordre des octets, alignement), mais
+   dans la zone normale (2400 0000h) : tous les octets sont écrits.
+   Pour les pixels : les octets sont rangés dans l'ordre du SH2, comme
+   vdp_dram[...] = BE16(...). Pas pour la table de lignes, que le
+   simulateur relit comme des mots de l'hôte (voir bigendian.h).
+   Sur console : *(volatile uint16_t *)(0x24000000 + offset) = pixels. */
+void vdp_dram_write8(uint32_t offset, uint8_t pixel);
+void vdp_dram_write16(uint32_t offset, uint16_t pixels);
+void vdp_dram_write32(uint32_t offset, uint32_t pixels);
+
+/* ---- Compteurs d'écritures dans le frame buffer ---------------------------
+   Le simulateur ne mesure pas le temps SH2, mais il peut compter ce qui
+   coûte : les accès au frame buffer, par le bus 16 bits du VDP.
+   Une écriture 8 ou 16 bits = un accès ; une écriture 32 bits = deux.
+   Seules les écritures par vdp_dram_write*() et vdp_overwrite_write*()
+   sont comptées (pas celles faites directement par le pointeur vdp_dram).
+   Une « image » va d'un échange de frame buffer au suivant : ce sont les
+   écritures qui ont servi à dessiner l'image qui vient d'être affichée. */
+
+enum { VDP_AREA_NORMAL, VDP_AREA_OVERWRITE, VDP_AREAS };
+enum { VDP_WRITE_8, VDP_WRITE_16, VDP_WRITE_32, VDP_WRITE_SIZES };
+
+typedef struct {
+  uint32_t writes[2][VDP_AREAS][VDP_WRITE_SIZES]; /* [cpu][zone][taille] */
+} vdp_frame_writes;
+
+/* Accès au bus pour un CPU : n8 + n16 + 2 x n32, toutes zones */
+uint32_t vdp_bus_accesses(const vdp_frame_writes *frame, int cpu);
+
+typedef struct {
+  unsigned long frames;          /* images terminées depuis le début */
+  vdp_frame_writes last;         /* la dernière image terminée */
+  uint32_t maxBusAccesses[2];    /* pire image depuis la dernière remise à 0 */
+  uint64_t totalBusAccesses[2];  /* depuis le début */
+} vdp_write_stats;
+
+/* resetMax : remet maxBusAccesses à zéro après lecture (pics par période) */
+void vdp_get_write_stats(vdp_write_stats *stats, int resetMax);
+
+/* Affiche les compteurs sur stderr, sur deux lignes préfixées par 'label',
+   et remet les maxima à zéro. Utilisée par les deux plates-formes. */
+void vdp_print_write_stats(const char *label);
+
 /* Registres */
 extern volatile uint16_t *const bitmapModeRegister;
 uint16_t vdp_read_fbcr(void);

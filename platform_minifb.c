@@ -516,6 +516,10 @@ static void printStats(const char *when, double seconds) {
           _statMaxUpdateNs / 1e6, _statMaxWaitNs / 1e6, _statSlowLoops,
           _qosEnabled ? "" : " [QoS desactivee]");
 
+  char label[32];
+  snprintf(label, sizeof label, "VDP %s%.1f s", when, seconds);
+  vdp_print_write_stats(label);
+
   /* Les maxima sont remis à zéro à chaque période, pour voir les pics */
   _statMaxLagNs = 0;
   _statMaxLoopNs = 0;
