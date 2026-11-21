@@ -13,8 +13,9 @@
    variable 'asset_<nom>' (Tilemap pour un plan, Sprite pour un sprite).
 
    - Plan : l'image entière du niveau. Elle est découpée en tiles de
-     32 x 32 ; les tiles identiques ne sont gardées qu'une fois, et tous
-     les plans partagent le même jeu de tiles (asset_tiles, 256 au plus).
+     TILE_SIZE x TILE_SIZE pixels (8 x 8, voir amb96/assets_types.h) ; les
+     tiles identiques ne sont gardées qu'une fois, et tous les plans
+     partagent le même jeu de tiles (asset_tiles, 65 535 au plus).
      Ses dimensions en tiles doivent être des puissances de 2.
    - Sprite : l'image telle quelle ; l'index 0 est transparent.
    - Palette (asset_palette) : celle de la première image, convertie au
@@ -31,9 +32,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TILE_SIZE 32
-#define TILE_PIXELS (TILE_SIZE * TILE_SIZE)
-#define MAX_TILES 256
+#include "assets_types.h" /* TILE_SIZE, TILESET_MAX_TILES */
+
 #define MAX_ASSETS 64
 #define MAX_PATH 1024
 
@@ -51,14 +51,20 @@ typedef struct {
   char name[64];
   char path[2 * MAX_PATH];
   Image image;
-  uint8_t *cells; /* plans : numéros de tile */
+  uint16_t *cells; /* plans : numéros de tile */
 } Asset;
 
 static Asset assets[MAX_ASSETS];
 static int assetCount = 0;
 
-static uint8_t tiles[MAX_TILES][TILE_PIXELS];
+/* Jeu de tiles : tableau qui grandit, et table de hachage (adressage
+   ouvert) pour retrouver vite une tile déjà vue. */
+static uint8_t *tiles = NULL; /* tileCount * TILE_PIXELS octets */
 static int tileCount = 0;
+static int tileCapacity = 0;
+
+#define HASH_SIZE (1 << 17) /* > 2 x TILESET_MAX_TILES */
+static int32_t hashTable[HASH_SIZE]; /* numéro de tile + 1, 0 = libre */
 
 static void fail(const char *fmt, const char *arg) {
   fprintf(stderr, "bmp2c : ");
@@ -223,20 +229,42 @@ static void checkPalette(const Asset *a, const Image *ref) {
 
 static int isPowerOf2(int v) { return v > 0 && (v & (v - 1)) == 0; }
 
+/* FNV-1a */
+static uint32_t hashTile(const uint8_t *tile) {
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < TILE_PIXELS; i++)
+    h = (h ^ tile[i]) * 16777619u;
+  return h;
+}
+
 static int findOrAddTile(const uint8_t *tile, const char *path) {
-  for (int i = 0; i < tileCount; i++)
-    if (memcmp(tiles[i], tile, TILE_PIXELS) == 0)
+  uint32_t slot = hashTile(tile) & (HASH_SIZE - 1);
+  while (hashTable[slot] != 0) {
+    int i = hashTable[slot] - 1;
+    if (memcmp(tiles + (size_t)i * TILE_PIXELS, tile, TILE_PIXELS) == 0)
       return i;
-  if (tileCount == MAX_TILES)
-    fail("plus de 256 tiles différentes (dernier plan : %s)", path);
-  memcpy(tiles[tileCount], tile, TILE_PIXELS);
+    slot = (slot + 1) & (HASH_SIZE - 1);
+  }
+
+  if (tileCount == TILESET_MAX_TILES)
+    fail("plus de 65 535 tiles différentes (dernier plan : %s)", path);
+  if (tileCount == tileCapacity) {
+    tileCapacity = tileCapacity ? tileCapacity * 2 : 256;
+    tiles = realloc(tiles, (size_t)tileCapacity * TILE_PIXELS);
+    if (tiles == NULL)
+      fail("mémoire insuffisante pour %s", path);
+  }
+  memcpy(tiles + (size_t)tileCount * TILE_PIXELS, tile, TILE_PIXELS);
+  hashTable[slot] = tileCount + 1;
   return tileCount++;
 }
 
 static void cutPlane(Asset *a) {
   const Image *img = &a->image;
   if (img->width % TILE_SIZE || img->height % TILE_SIZE)
-    fail("%s : largeur et hauteur doivent être des multiples de 32", a->path);
+    fail("%s : largeur et hauteur doivent être des multiples de la taille "
+         "des tiles (TILE_SIZE)",
+         a->path);
 
   int w = img->width / TILE_SIZE;
   int h = img->height / TILE_SIZE;
@@ -245,7 +273,7 @@ static void cutPlane(Asset *a) {
          "puissance de 2 (8, 16, 32, 64...)",
          a->path);
 
-  a->cells = malloc((size_t)w * h);
+  a->cells = malloc((size_t)w * h * sizeof *a->cells);
   if (a->cells == NULL)
     fail("mémoire insuffisante pour %s", a->path);
 
@@ -257,7 +285,7 @@ static void cutPlane(Asset *a) {
                img->pixels + (size_t)(ty * TILE_SIZE + y) * img->width +
                    tx * TILE_SIZE,
                TILE_SIZE);
-      a->cells[ty * w + tx] = (uint8_t)findOrAddTile(tile, a->path);
+      a->cells[ty * w + tx] = (uint16_t)findOrAddTile(tile, a->path);
     }
   }
 }
@@ -269,6 +297,15 @@ static void writeBytes(FILE *f, const uint8_t *p, size_t n) {
     if (i % 16 == 0)
       fprintf(f, "\n   ");
     fprintf(f, " 0x%02X,", p[i]);
+  }
+  fprintf(f, "\n");
+}
+
+static void writeWords(FILE *f, const uint16_t *p, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    if (i % 12 == 0)
+      fprintf(f, "\n   ");
+    fprintf(f, " 0x%04X,", p[i]);
   }
   fprintf(f, "\n");
 }
@@ -325,7 +362,7 @@ static void writeOutput(const char *base, const char *manifest) {
             tileCount);
     for (int i = 0; i < tileCount; i++) {
       fprintf(c, "\n    /* tile %d */", i);
-      writeBytes(c, tiles[i], TILE_PIXELS);
+      writeBytes(c, tiles + (size_t)i * TILE_PIXELS, TILE_PIXELS);
     }
     fprintf(c, "};\n\nconst Tileset asset_tiles = {%d, tilePixels};\n\n",
             tileCount);
@@ -337,9 +374,9 @@ static void writeOutput(const char *base, const char *manifest) {
     const Asset *a = &assets[i];
     if (a->kind == KIND_PLANE) {
       int w = a->image.width / TILE_SIZE, hh = a->image.height / TILE_SIZE;
-      fprintf(c, "/* %s */\nstatic const uint8_t %s_cells[%d * %d] = {",
+      fprintf(c, "/* %s */\nstatic const uint16_t %s_cells[%d * %d] = {",
               a->path, a->name, w, hh);
-      writeBytes(c, a->cells, (size_t)w * hh);
+      writeWords(c, a->cells, (size_t)w * hh);
       fprintf(c, "};\n\nconst Tilemap asset_%s = {%d, %d, %s_cells};\n\n",
               a->name, w, hh, a->name);
     } else {

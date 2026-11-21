@@ -30,6 +30,7 @@ set_target_properties(pixel PROPERTIES LINKER_LANGUAGE CXX)
 # ---- Outil : BMP 8 bits -> données C ---------------------------------------
 
 add_executable(bmp2c tools/bmp2c.c)
+target_include_directories(bmp2c PRIVATE amb96)
 target_compile_options(bmp2c PRIVATE -Wall -Wextra)
 
 # ---- AMB96 -----------------------------------------------------------------
