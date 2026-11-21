@@ -18,6 +18,24 @@ int platform_running(void);
 /* Outil de mesure : temps écoulé depuis le début du dernier VBlank */
 double platform_vblank_elapsed_ms(void);
 
+/* ---- Pour le programme 68000 ------------------------------------------- */
+
+/* Manette Mega Drive 3 boutons, port 1 : un bit par bouton, 1 = appuyé.
+   Même ordre que l'octet SACBRLDU qu'obtient le 68000 après ses deux
+   lectures du port ($A10003, TH haut puis TH bas) et l'inversion.
+   Seul le programme 68000 (md_vint) a le droit de l'appeler : sur la
+   console, les SH2 n'ont pas accès aux ports manette. */
+#define PAD_UP 0x01
+#define PAD_DOWN 0x02
+#define PAD_LEFT 0x04
+#define PAD_RIGHT 0x08
+#define PAD_B 0x10
+#define PAD_C 0x20
+#define PAD_A 0x40
+#define PAD_START 0x80
+
+unsigned platform_read_pad(void);
+
 /* ---- Pour les modules 32X ---------------------------------------------- */
 
 /* Les deux SH2 sont identiques : c'est le câblage de leur broche MD5 qui

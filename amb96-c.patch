@@ -1,0 +1,2362 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 38f04ba..e69db7c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -10,15 +10,62 @@ set(MINIFB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+ 
+ add_subdirectory(minifb)
+ 
++find_package(Threads REQUIRED)
++
++# ---- Simulateur 32X : modules communs à tous les jeux ----------------------
++
++set(SIMULATOR_SOURCES vdp.c interface.c)
++
++# ---- Démo d'origine --------------------------------------------------------
++
+ add_executable(pixel
+ 	game.c
+-    vdp.c
+-    platform_minifb.c
+-	interface.c
++	${SIMULATOR_SOURCES}
++	platform_minifb.c
+ )
+-
+ target_compile_options(pixel PRIVATE -Wall -Wextra)
++target_link_libraries(pixel PRIVATE minifb Threads::Threads)
++set_target_properties(pixel PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-target_link_libraries(pixel PRIVATE minifb)
++# ---- Outil : BMP 8 bits -> données C ---------------------------------------
+ 
+-set_target_properties(pixel PROPERTIES LINKER_LANGUAGE CXX)
++add_executable(bmp2c tools/bmp2c.c)
++target_compile_options(bmp2c PRIVATE -Wall -Wextra)
++
++# ---- AMB96 -----------------------------------------------------------------
++# Les images sont converties à chaque modification du manifeste ou d'un BMP.
++
++set(AMB96_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/amb96/assets/assets.txt)
++file(GLOB AMB96_BMP CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/amb96/assets/*.bmp)
++set(AMB96_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated/amb96_assets)
++
++add_custom_command(
++	OUTPUT ${AMB96_GENERATED}.c ${AMB96_GENERATED}.h
++	COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
++	COMMAND bmp2c ${AMB96_MANIFEST} ${AMB96_GENERATED}
++	DEPENDS bmp2c ${AMB96_MANIFEST} ${AMB96_BMP}
++	COMMENT "Conversion des images AMB96"
++)
++
++set(AMB96_SOURCES
++	amb96/amb96.c
++	amb96/md68k.c
++	amb96/framebuffer.c
++	amb96/plane.c
++	amb96/sprite.c
++	${AMB96_GENERATED}.c
++	${SIMULATOR_SOURCES}
++)
++
++# Avec fenêtre
++add_executable(amb96 ${AMB96_SOURCES} platform_minifb.c)
++target_include_directories(amb96 PRIVATE . amb96 ${CMAKE_CURRENT_BINARY_DIR}/generated)
++target_compile_options(amb96 PRIVATE -Wall -Wextra)
++target_link_libraries(amb96 PRIVATE minifb Threads::Threads)
++set_target_properties(amb96 PROPERTIES LINKER_LANGUAGE CXX)
++
++# Sans fenêtre : tests et captures (voir platform_headless.c)
++add_executable(amb96_headless ${AMB96_SOURCES} platform_headless.c)
++target_include_directories(amb96_headless PRIVATE . amb96 ${CMAKE_CURRENT_BINARY_DIR}/generated)
++target_compile_options(amb96_headless PRIVATE -Wall -Wextra)
++target_link_libraries(amb96_headless PRIVATE Threads::Threads)
+diff --git a/Makefile b/Makefile
+index f75d395..06f4876 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-.PHONY: all clean rebuild
++.PHONY: all clean rebuild run amb96
+ 
+ all:
+ 	cmake -S . -B build
+@@ -10,4 +10,7 @@ clean:
+ rebuild: clean all
+ 
+ run: all
+-	./build/pixel
+\ No newline at end of file
++	./build/pixel
++
++amb96: all
++	./build/amb96
+diff --git a/amb96/README.md b/amb96/README.md
+new file mode 100644
+index 0000000..8f3a018
+--- /dev/null
++++ b/amb96/README.md
+@@ -0,0 +1,114 @@
++# AMB96 en C
++
++Portage en C d'AMB96 (2021, assembleur SH2 + 68000) sur le simulateur 32X
++`pixel`. Deux plans de tiles défilent indépendamment, l'un au-dessus de
++l'autre, séparés par une ligne mobile. Un grand sprite (Sonic) et quatre
++coins arrondis sont dessinés par-dessus. Les deux SH2 se partagent le
++travail.
++
++## Compiler et lancer
++
++```sh
++make amb96                # compile tout et lance la fenêtre
++./build/amb96_headless --frames 120 --shot 60:image.ppm   # sans fenêtre
++```
++
++Sous Linux, MiniFB a besoin des en-têtes OpenGL. On peut s'en passer :
++`cmake -S . -B build -DMINIFB_USE_OPENGL_API=OFF`.
++
++## Commandes
++
++| Manette          | Clavier      | Effet                                 |
++|------------------|--------------|---------------------------------------|
++| Haut / Bas       | flèches      | déplace la ligne de séparation        |
++| A + flèches      | J + flèches  | fait défiler le plan A (haut)         |
++| B + flèches      | K + flèches  | fait défiler le plan B (bas)          |
++| Start + flèches  | Entrée + flèches | déplace le sprite                 |
++| C maintenu       | L            | 4 pixels par image au lieu de 1       |
++
++Le contenu suit la flèche. J, K et L sont repérés par leur position :
++ils sont au même endroit en AZERTY et en QWERTY.
++
++## Les images
++
++Toutes les images sont des **BMP 8 bits indexés** (256 couleurs) qui
++partagent la même palette. `tools/bmp2c` les convertit en C à chaque
++compilation, d'après le manifeste `assets/assets.txt` :
++
++```
++plane     plane_a     plane_a.bmp
++sprite    sonic       sonic.bmp
++```
++
++- **Plan** : l'image entière du niveau. bmp2c la découpe en tiles de
++  32 × 32, ne garde qu'un exemplaire des tiles identiques, et fait un seul
++  jeu de tiles pour tous les plans (256 tiles au plus). Le nombre de tiles
++  en largeur et en hauteur doit être une puissance de 2 : les plans
++  actuels font 1024 × 1024 pixels, soit 32 × 32 tiles.
++- **Sprite** : l'image telle quelle. L'index 0 est transparent.
++- **Palette** : celle de la première image du manifeste. bmp2c refuse une
++  image qui donne une autre couleur à un index qu'elle utilise.
++
++GIMP (Image > Mode > Couleurs indexées, puis Exporter en BMP), Aseprite
++ou Pillow (mode `P`) produisent ce format. Pour ajouter une image : la
++déposer dans `assets/`, l'ajouter au manifeste, puis l'utiliser sous le
++nom `asset_<nom>` (déclaré dans `amb96_assets.h`, généré).
++
++## Organisation du code
++
++| Fichier           | Rôle                                                       |
++|-------------------|------------------------------------------------------------|
++| `amb96.c`         | boucles du Master et du Slave, logique, dessin d'une image |
++| `md68k.c`         | programme 68000 : manette → registre COMM                  |
++| `shared.h`        | registres COMM utilisés, scène partagée, accès sans cache  |
++| `plane.c`         | dessin d'une ligne de plan de tiles                        |
++| `sprite.c`        | dessin d'un sprite (découpage aux bords, transparence)     |
++| `framebuffer.c`   | table de lignes et accès au frame buffer de dessin         |
++| `assets_types.h`  | types `Tileset`, `Tilemap`, `Sprite`                       |
++| `../tools/bmp2c.c`| convertisseur BMP → C                                      |
++
++### Une image
++
++1. Le 68000 écrit la manette dans `COMM_PAD` à chaque VBlank.
++2. Le Master lit la manette, calcule la scène (défilements, séparation,
++   position du sprite), la publie, puis écrit le numéro d'image dans
++   `COMM_FRAME`.
++3. Chaque CPU dessine **une ligne sur deux** : le Master les paires, le
++   Slave les impaires, fond puis sprites. Un CPU possède entièrement ses
++   lignes, donc aucun des deux n'attend l'autre au milieu de l'image
++   (l'original séparait l'écran en deux à la ligne 128, et devait se
++   synchroniser entre les tiles et les sprites).
++4. Le Slave écrit `COMM_SLAVE_DONE`. Le Master attend la fin du VBlank en
++   cours, demande l'échange de frame buffer, puis attend qu'il ait lieu.
++
++### Différences avec AMB96.asm
++
++- Le 68000 ne calcule plus rien : il transmet la manette, et la logique
++  est sur le Master. La ligne de séparation ne passe plus par les
++  registres DREQ.
++- Les sprites sont placés en coordonnées d'écran (plus de décalage de
++  128), et le sprite se déplace avec Start au lieu de suivre les
++  défilements verticaux.
++- Le fondu de palette (`palFader`) et le benchmark par H_INT ne sont pas
++  encore portés.
++- Les numéros de tile commencent à 0 (l'original commençait à $80, qui
++  correspondait à l'adresse $06020000).
++- La couleur 255 n'a plus son bit de priorité ($FC00 → $7C00) : un BMP
++  ne peut pas le contenir.
++
++## Vers une vraie 32X
++
++Le code du jeu n'utilise que l'API du simulateur, qui imite les registres
++de la 32X (`vdp_dram`, `vdp_palette`, FBCR, `comm[]`). À reprendre pour la
++console :
++
++- `SHARED()` dans `shared.h` donne déjà l'adresse cache-through sur SH2
++  (non testé sur matériel).
++- Les sprites pourraient utiliser la zone overwrite du frame buffer
++  (DRAM + 20000h), où un octet nul n'est pas écrit : le matériel ferait la
++  transparence. Le simulateur ne l'émule pas encore.
++- `memcpy` dans `plane.c` et la boucle de `sprite.c` sont les premiers
++  candidats à l'optimisation (copies par mots longs, ou les routines
++  assembleur d'origine).
++- Le simulateur ne mesure pas le temps SH2 : le budget d'une image
++  (environ 23 MHz par CPU) reste à vérifier.
+diff --git a/amb96/amb96.c b/amb96/amb96.c
+new file mode 100644
+index 0000000..55a690f
+--- /dev/null
++++ b/amb96/amb96.c
+@@ -0,0 +1,229 @@
++/* =========================================================================
++   AMB96 : deux plans de tiles qui défilent indépendamment (A en haut,
++   B en bas, séparés par une ligne mobile), un grand sprite et quatre
++   coins arrondis, dessinés par les deux SH2.
++
++   Déroulement d'une image :
++
++     Master                               Slave
++     ------                               -----
++     lit la manette (COMM_PAD)
++     calcule la scène
++     publie la scène, COMM_FRAME = n  --> lit la scène
++     dessine les lignes paires            dessine les lignes impaires
++     attend COMM_SLAVE_DONE = n      <--  COMM_SLAVE_DONE = n
++     demande l'échange de frame buffer
++     attend qu'il soit fait (VBlank)
++     image suivante                       attend COMM_FRAME = n + 1
++
++   Le Slave ne commence jamais avant l'échange : il attend le COMM_FRAME
++   suivant, que le Master n'écrit qu'une fois l'échange fait.
++
++   Commandes (le contenu suit la flèche) :
++     Haut/Bas           ligne de séparation
++     A + flèches        défilement du plan A
++     B + flèches        défilement du plan B
++     Start + flèches    déplace le sprite
++     C (maintenu)       plus vite
++   ========================================================================= */
++
++#include "assets_types.h"
++#include "framebuffer.h"
++#include "game.h"
++#include "interface.h"
++#include "plane.h"
++#include "platform.h"
++#include "shared.h"
++#include "sprite.h"
++#include "vdp.h"
++
++#include "amb96_assets.h" /* généré par bmp2c depuis assets/assets.txt */
++
++#define SPEED_SLOW 1 /* pixels par image */
++#define SPEED_FAST 4
++
++/* Scène de l'image en cours, publiée par le Master (voir shared.h) */
++static Scene sharedScene;
++
++static void initVDP(int screenHeight);
++static void updateScene(Scene *scene, unsigned pad, int screenHeight);
++static void drawScene(const Scene *scene, int cpu, int screenHeight);
++static int flipFrameBuffer(void);
++
++/* ---- Interruptions : non utilisées (V_INT reste masquée) ---------------- */
++
++void master_vint(void) { interface_clear_vint(); }
++void slave_vint(void) { interface_clear_vint(); }
++
++/* ---- Master ------------------------------------------------------------- */
++
++void master_main(void) {
++  const int screenHeight = vdp_screen_height();
++
++  initVDP(screenHeight);
++
++  /* Valeurs de départ d'AMB96.asm */
++  Scene scene = {
++      .splitLine = 80,
++      .scrollAX = 300,
++      .scrollAY = 336,
++      .scrollBX = 300,
++      .scrollBY = 336,
++      .sonicX = (FB_WIDTH - 128) / 2,
++      .sonicY = 40,
++  };
++
++  uint16_t frame = 0;
++
++  for (;;) {
++    if (++frame == 0) /* 0 veut dire « pas encore d'image » */
++      frame = 1;
++
++    updateScene(&scene, comm[COMM_PAD], screenHeight);
++
++    /* Publier la scène, puis lancer le Slave */
++    *SHARED(&sharedScene) = scene;
++    SHARED_BARRIER();
++    comm[COMM_FRAME] = frame;
++
++    drawScene(&scene, PLATFORM_CPU_MASTER, screenHeight);
++
++    /* Attendre que le Slave ait fini ses lignes */
++    while (comm[COMM_SLAVE_DONE] != frame)
++      if (!platform_running())
++        return;
++
++    if (!flipFrameBuffer())
++      return;
++  }
++}
++
++/* ---- Slave -------------------------------------------------------------- */
++
++void slave_main(void) {
++  const int screenHeight = vdp_screen_height();
++  uint16_t lastFrame = 0;
++
++  for (;;) {
++    uint16_t frame;
++    while ((frame = comm[COMM_FRAME]) == lastFrame)
++      if (!platform_running())
++        return;
++
++    SHARED_BARRIER();
++    Scene scene = *SHARED(&sharedScene);
++
++    drawScene(&scene, PLATFORM_CPU_SLAVE, screenHeight);
++
++    SHARED_BARRIER();
++    comm[COMM_SLAVE_DONE] = frame;
++    lastFrame = frame;
++  }
++}
++
++/* ---- Initialisation ----------------------------------------------------- */
++
++static void initVDP(int screenHeight) {
++  /* Mode Blank : l'échange de frame buffer est immédiat */
++  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC);
++
++  /* Une table de lignes dans chacun des deux frame buffers */
++  fb_init_line_table(screenHeight);
++  vdp_write_fbcr(vdp_read_fbcr() ^ FBCR_FS);
++  fb_init_line_table(screenHeight);
++
++  for (int i = 0; i < PALETTE_COLORS; i++)
++    vdp_palette[i] = asset_palette[i];
++
++  /* Mode Packed Pixel */
++  *bitmapModeRegister = (*bitmapModeRegister & 0xFFFC) | 0x0001;
++}
++
++/* ---- Logique ------------------------------------------------------------ */
++
++static int clamp(int v, int min, int max) {
++  return v < min ? min : (v > max ? max : v);
++}
++
++static void updateScene(Scene *scene, unsigned pad, int screenHeight) {
++  const int speed = (pad & PAD_C) ? SPEED_FAST : SPEED_SLOW;
++
++  /* Direction de la croix : dx, dy dans -1, 0, 1 */
++  const int dx = ((pad & PAD_RIGHT) ? 1 : 0) - ((pad & PAD_LEFT) ? 1 : 0);
++  const int dy = ((pad & PAD_DOWN) ? 1 : 0) - ((pad & PAD_UP) ? 1 : 0);
++
++  if (pad & PAD_START) {
++    scene->sonicX = (int16_t)clamp(scene->sonicX + dx * speed, -200, 520);
++    scene->sonicY = (int16_t)clamp(scene->sonicY + dy * speed, -200, 420);
++    return;
++  }
++
++  /* Le contenu suit la flèche : il monte quand le défilement augmente */
++  if (pad & PAD_A) {
++    scene->scrollAX = (int16_t)(scene->scrollAX - dx * speed);
++    scene->scrollAY = (int16_t)(scene->scrollAY - dy * speed);
++  }
++  if (pad & PAD_B) {
++    scene->scrollBX = (int16_t)(scene->scrollBX - dx * speed);
++    scene->scrollBY = (int16_t)(scene->scrollBY - dy * speed);
++  }
++  if (!(pad & (PAD_A | PAD_B)))
++    scene->splitLine =
++        (int16_t)clamp(scene->splitLine + dy * speed, 0, screenHeight);
++}
++
++/* ---- Dessin ------------------------------------------------------------- */
++
++static void drawScene(const Scene *scene, int cpu, int screenHeight) {
++  const Screen screen = {
++      .pixels = fb_pixels(),
++      .height = screenHeight,
++      .firstLine = cpu, /* Master : lignes paires, Slave : impaires */
++      .lineStep = PLATFORM_CPU_COUNT,
++  };
++
++  /* Fond. La ligne y de l'écran montre la ligne (scrollY + y) du plan :
++     le plan B ne « saute » pas quand la séparation bouge. */
++  for (int y = screen.firstLine; y < screenHeight; y += screen.lineStep) {
++    uint8_t *dst = screen.pixels + y * FB_WIDTH;
++    if (y < scene->splitLine)
++      plane_draw_line(dst, &asset_plane_a, &asset_tiles, scene->scrollAX,
++                      scene->scrollAY + y);
++    else
++      plane_draw_line(dst, &asset_plane_b, &asset_tiles, scene->scrollBX,
++                      scene->scrollBY + y);
++  }
++
++  /* Sprites, du fond vers l'avant */
++  sprite_draw(&screen, &asset_sonic, scene->sonicX, scene->sonicY);
++
++  const int right = FB_WIDTH - asset_corner_tr.width;
++  const int bottom = screenHeight - asset_corner_bl.height;
++  sprite_draw(&screen, &asset_corner_tl, 0, 0);
++  sprite_draw(&screen, &asset_corner_tr, right, 0);
++  sprite_draw(&screen, &asset_corner_bl, 0, bottom);
++  sprite_draw(&screen, &asset_corner_br, right, bottom);
++}
++
++/* Demande l'échange des frame buffers et attend qu'il soit fait.
++
++   Sur 32X comme dans le simulateur, une demande faite pendant l'affichage
++   prend effet au début du VBlank suivant, mais une demande faite PENDANT
++   le VBlank prend effet aussitôt. Si une image est dessinée plus vite que
++   le VBlank (c'est le cas sur l'hôte), plusieurs échanges auraient lieu
++   dans le même VBlank : le jeu tournerait à plus de 60 images/s.
++   On attend donc la fin du VBlank avant de demander l'échange : il a
++   lieu au VBlank suivant, une fois par image au plus. */
++static int flipFrameBuffer(void) {
++  while (vdp_read_fbcr() & FBCR_VBLK)
++    if (!platform_running())
++      return 0;
++
++  const uint16_t wanted = (vdp_read_fbcr() ^ FBCR_FS) & FBCR_FS;
++  vdp_write_fbcr(wanted);
++
++  while ((vdp_read_fbcr() & FBCR_FS) != wanted)
++    if (!platform_running())
++      return 0;
++  return 1;
++}
+diff --git a/amb96/assets/assets.txt b/amb96/assets/assets.txt
+new file mode 100644
+index 0000000..a0b1d8a
+--- /dev/null
++++ b/amb96/assets/assets.txt
+@@ -0,0 +1,12 @@
++# Images converties par tools/bmp2c (voir l'en-tête de bmp2c.c).
++# type    nom         fichier
++# La palette est celle de la première image.
++
++plane     plane_a     plane_a.bmp
++plane     plane_b     plane_b.bmp
++
++sprite    sonic       sonic.bmp
++sprite    corner_tl   corner_tl.bmp
++sprite    corner_tr   corner_tr.bmp
++sprite    corner_bl   corner_bl.bmp
++sprite    corner_br   corner_br.bmp
+diff --git a/amb96/assets/corner_bl.bmp b/amb96/assets/corner_bl.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..215e5ea362a42387e66501ae44a5536d5736c9f7
+GIT binary patch
+literal 2102
+zcmeIyFKpZ}9L4c(rGlWz&~RZ345<`)Fw#h2XklRC(SwBtLjwZ?k4=Grfu@FrhHvuS
+zb-V8Vw9+(<^d~*p(kIW6A}g!!4;lM;xQB1R*JJKD!ae->atL=E0td|?+dp>LWLbta
+z24f8@24gJNSd6t;Yhkfuiv?$~c}||^WJ^xwa*WF<iUQ*btSczX66;EGS5j3KxvMB#
+zMd?=5b<N5@(liaVZ)n?=CbX>AYc}f*&tXHi-SQGTx~``SJ$)GH<G?VEjB#W)?%3^i
+zj4@?miWBoZGsT%X&MeD<a}Fnm_nzQAP9Cqc5BLxWArM2rD-aZjX^oK>BZ`rrNK{0M
+zfXGrZVT`aTR^+)TQVLO~l%lG{Y9;EFT0GXGX~ff$Xj}2T7VC|8*@*2{bSa(adNK5(
+zAH*<-F|DH*M=?!ep2e~V=Y&u3BBTTnqKHu_trGgo=Qp@?2hvTxH8=e5r@7pJwKV6)
+zpX#~4)ieK--=2S_Z~X$F_Al{?U*z9@nSc2ee)Vg7^sD?azh2+>Z}3O_Rz3CK@te#$
+O^}qMqujhaJzn-5T&Q#3+
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/corner_br.bmp b/amb96/assets/corner_br.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..74a19b52ea45d8c003ffc1655f7d222e1dc6509f
+GIT binary patch
+literal 2102
+zcmeH{A#B?~6o$V_1xC}sgEO0<NhQ-jOCyD*g@J{kfrWvlhK7b=RiL5a(SrvM{?paz
+zmZnZBt(r#qq)+dp?|<(s%kt{yUB*k@-NFyx`;i-t;ufC2&2YmE%r=AUB{m<jEW;Xu
+zu?8lCF&1kq##*ekFj=z6g0t8>C(m=TDJOF|#^n@6fpG=a6_jO(btSngsj7<HRTQqG
+zbSvt*X65f`nugjptk-Lrux7K_u-$BV3|rdWj;GMlwjFKg=t55yd-`Euhy(j!&wjsW
+zh=~J-cwihy4sm3RBhxhDoWsfCy(f5&lgBHa13m;o2*eQZ3IqjW>M;^yL@^Q+iHb-O
+z5LqG<#t56RBF{yUC`6ekMOBH_O4Ny3+}EOM#KVJFuf^j=Y_{TQD|S24CR)*UqVGi4
+zi@p~_>Vp^taX5%^6w@S}6F%WZNCXk0h*2nY34QVP4wk-w`FEjfHAlD@diAN6_MG~q
+z#9RM9aqiDAdFRg(3;xZDC4U-N^e2I3|0i(4{|;R8uYrsH82EcXFStBE2R`G|4cF#B
+R^n5V?&pp?l|Nr|>*Dq|KRLuYY
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/corner_tl.bmp b/amb96/assets/corner_tl.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b28834bba1499159ee42dd85b035fa87e2a250b0
+GIT binary patch
+literal 2102
+zcmeH{Eo|d37>1uo13@Q4!wb8>kV&D1k&X<84h9aE77iAM1_lO}O@)DhriO-w@5#%0
+zw{`s)nU3s}9@*0K+MnfES^d7tc&WQv_yzoY<%U;r3(r3mxM2Ynn?d#xTP9hSVU599
+z1GB*xi!~NwE!J9?E!k|rS!|w@=Q-J&lerw@a*CqBxB}}6%Cf||lH8S4RYmS93Rh9O
+z6?I*+^7k}NL+u;dwxtOz>-Cz=dc$Mb&~3Log^sT4=|WE*2KqQKj3Z+l*^N7PyB%Xp
+z?AgaX(=@S<6H}a+=Nac5P7d!q!F!xMUTGfiArL|!hJaTfC=k;aBQZu4BSDd<h!g>l
+zB{E@*un8;jToj2yl!;PQl~}Drov6iqEt*C=Jczaxk882sh^LL%Zbg^qMAwU<7yTfH
+zL5yh}#W;%nUQCmiXW^Xi2`@q-h!91LLTQxHH{W+~>J2Qvi!ZHfJ^s7Da)7V*mk*G>
+z+ojT#z-RoW4r%?Rz~}t=4$J!UfrCG{!(V?U@XwzPyzwUkZ~dvjJAWc^<Uee2?2i*4
+Q{rkizpX%^t&iO;=54x39%>V!Z
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/corner_tr.bmp b/amb96/assets/corner_tr.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..e15e2528f3c750c0a4f2a814000d746890ed7bd5
+GIT binary patch
+literal 2102
+zcmeIzEokIG7{>8`p(5%SIr8EzGNur_GH|9cwsK|V+Le_nV<RIY*Okb~$gv|wj(m>U
+z-MhB?33nVdec|C9_~m7WBqWQU4;j09xQ8FW_e1VDz&*Tv+lM>$fxTvs?JnCdvMj?I
+zgRur?gE1CsEXG=_wJ=+<*@Cm!JSWd{vN<PnImYD_MS*bz))kaxiFGBpE2*lA+*K5=
+zqI3)Dx@O@YX_|)GH!PP+ny_TGTCrZOc@AsZ&4!oI(zYFK=;%UE7km0)V2A_TVas;A
+zWr!&wV;q^Li7`%0abliloO3uiy!Qm}aq@Vjb-;%}2!R*^UV)%MOg%<oj3`EeB2f`3
+z0wPPvgfYUVSdr(VNGU{_Qi`e)i-o9DYVlZ$rV&q1V!0I0E3sOOm$lezM4QrzwiA6P
+zx?c3X7*Zd^Fo<y!(<J6uI469H7a=8x5JikasY~c9U-#hLJFx#;d}iG`!Y8|K?EjxV
+zJ+y0e!}V{T#;@$Z<G=U)_{I4HU-I94!T<1if8(?Mj?ejfKJ^cJ>PLJuf2<$<RNwrZ
+KrAj}mYxN5Uc2vy(
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/plane_a.bmp b/amb96/assets/plane_a.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..67f2bc7fb3eb7ad56b56d5b68c87ec126f787209
+GIT binary patch
+literal 1049654
+zcmeI*J!~V%nfQPHfD6`1X#rXwK|&-5f<T)f2Q(=CM1#N(IEcQ3T3X37H=dcD*S+!V
+z+}NWRbG4i<IKA)}Ug*@JLx-3B;n1POO*h<dL;X?Jd})$Js;j#xai_l@W8m}Nh@{y2
+zRMk^2PyOrh|NWQGGs^${mrTY{|Hr@hfBsMAGyTsqna?x-pUCJxng5gV|70@$|M#;@
+z<}>}*{Qu*#&pylKKmR=QdH(ZE=AWNuKL0$Q$$y^De4fu|^7(uw^Ur+dvw!9@neXzM
+ze5I19R4SRz{#nU<_FX0O`FEAfFMjch%;(?zB9s5_7nxuF@|T(XcfZV3zWZh7SHJpI
+zrt;mdGQarlSD9aa_ph15!^6zKe*Ylz<(FS(4!{30^M^nDA@k)Af5`mlPk+k%_n-bd
+z^UV+co%!?s{7>fp{qX0^pa1-q%%6YwOXe>>{5A8JAOD*9>)-yC`P+|w%lz-({x|c#
+z|NFn0zx}BG{5|vcAOD{D$3Om&`TLLm$o%8Se`Nmo&wpmV`|i8Uch}!#zW@IF%n#px
+zpZV_k`^@*(>i_;B^ZgG$WPbSJhs=*Z{E+$n`iIO9*FR)_RR8_skC`8T{4sO=<Bypi
+zu7Aw@c>QDM`ufLACUc$nO#S)nI`jGG*O|QflfTYXD%Y7`s6W5B&iqpS`Q>%ySHHT>
+z{OiA7XAae$!|Tk0!|TkKUtVY4yt&T&;SblDZ~k<h`O|-2Xa3)RUuXX3f37osR)79{
+zo%!=$t}}oA%XQ{2f4$E9^{>~Nzp4NJ+jZt|f4k27{qNVAfBfS*^Ur@?XTJOHI`h5y
+z^Zj+^2leNN>&y>7UT1#%@j7#@{`>kmbIl*V1Jl0)nM_6k00000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000xFy~#y-x&35q<^$0EDu^BY;J2NQ*x?@ss*}fpr>uc)zjE48M3$gws?%>o#hd
+z<J23?)?T;oN%bE9zQMEOjrH8{kgVdrUkx@Eg>tp#G`p*Y20+T3Klp^>zp@o<0F-Pt
+zUv0FzhfFR4%2yj3|1S&=C`SJuP_EUx<N<)(;0)lU;qlnTe<cv}v$BOUsQ@75*`{Uy
+z>x_RT@7(M2F96bRQ!{}0@n4?p^cUpH&4aW*eWaSVxf#G~!-KIK|KAk<LWokMXLuVR
+zJw9w^25>9!FS3=^bV-mc$4H^g%m8jD{)G^gU6<7Wq}SldCN2VgWq2TokN>rz)2Hi4
+zdYwJozy{#<;$Li)_ohhzkTSzf%mCgP9>RM1e<4J%P6L3H^5oS9W&m#tXLZ&V{~}vs
+zOCVBf1J?lF8Xm^_;$MjJzTpjlG#I|#xEX-kj(<^Zb37O+wRsu9JHwN(>;Fss^nPgh
+zrfbMKfE4&}x?v-L+mC-ypaDQi4PT#ZRs-<f@F3RP{|m9rG5}KQkB>Ji{y!L=!@A>N
+z<eIDlBAw1QD+7of{|C1Dzf#nt1A)}punZt}{m+A)&@+Dlg}u~0ctE*KWEaqBLc@qV
+zihoh=@NWZB$V+Ao;7LMT3C<0Vz$*Wb*8dApp(FrOY4|FEDZnQe$rKg8v-lSdbAU*t
+z%ct=hfTx$|kK(_|@$rS>30U?2y+R<Zw~=em03ek<#E;ykgW=mGwh~+#9>DFyzbJJL
+z?+twV;%5L)2U5O>-;5j&3}5yw#lNUf85pT_5qlTVvw@UJWB_*=|5-8sq|^Jj%XiPN
+zJSpGBeU;<mE5rAHTm8Q%u?UD%@?ORqyFXWfJB<4($Hzm%*KZg9d7DYUIW@z(1D`rC
+zb_Ss1UtYvs1Bf60xw)9OvEBaEpENK}*TIfCc7Ndy-2W?P25@q>@h__E0zxXq9J{~p
+z12^WY+<E+Ox2OezRJx2cc7HkQxCil85>Dgy|JybL{skpA0U>>kJUM(DXY4+X|Co8i
+zgZS~EU5IHbZ3X~HrC8?xCinKnt0{W-@n7L`V5HM!j0=HYO}?_hZ(}SaKD_h(KiB43
+zK%~;q*U>Y8z`dP+h;g&<f82TeiyAWkNT;jl`*#BI|80y?0FUlI{&O4yLP|x?00QwZ
+zzlpvE@YwXl+wK3en(Z^Gn?3`O0+H7MX724hi<|*GF@49j@xPtlGR1XRWsU(NrLLYw
+zo4osCCjO(>6pbJMZmYe!*KW5OwOqtjps?pj<^YgN5qANdOz-Vh)8|)Fi-A2ged$*H
+z|CHNxDq;Kl8B_v8YQ2e6#U~K|TGR~Sndy6v82?hrZawVJ236StfV7IX1~4E0!)VP&
+zqVccS@q0D<{lMF-03fx_qwE4Y`Q6<2HHel0JfC|REo>idyu_zpw=W3Llt-q|0i-~b
+zI-VzQ=f9ZqNNWHu=3hpM75~z0TQ>ld0YQ32Spzs(xVJl61~55B5EL)|rEG<Lfw9uB
+zgKrO{N`yL|i}5c9QI-<d694W!%QJy_>Hs3e-db-0IDNnPbzMft0H()?0>XCR#{6G%
+z>>7aV@>c>rY0;MNPYw5WdlA+E))fCe%Z&ieC;f<l)vPlBQ~XC+N(>$&n26v1%Z}X~
+zV2v%nNU`A?%M9SubZ@u3uwF`BSNzM`cy2EgE(1oY4K0`N&G9ea*={DBIYuy+K>sg0
+zVP8b!DnO*$nO)a?YPz>u$}8I|0oNA)eX9Wg3jjzr%jNqe@h>kdi-Ap#5e0<px>wHH
+zH*M|($?gT-9!MR}?g-!M#gcExG6Ps&{P#+sGXIg*l3xc%39AjfOXJ`2IMMpzU)FLK
+zRt_bAPoGr=@ZfUU7jpT;W+`Fe7=e<=_#c3ctEb^3cX|BF_u*gV`1otn2PFQ1+h>sh
+zJQytfcvi*07LE}qw;%sp0RRlY3cY;4BL3xtMFwCvMvzSW6VZUB@JIL__}71%orS+v
+zWNq<p=ZN+Kkmq3|*LZK=#H+AV04HmV|9;(Z>Pq8YOWD`DJ%w_=z#=bf2CzE*FT>6x
+zo*0f1CNut*vR4oyt8MFrz=BrXQA%1>t2vJ2>{0;?@WPhyd${tu^1@~S>x}=dO$`9<
+z00N{8o4c=$|In9$8;=nuH2>epS~LLc|3T{MIrDHCz@t@PmM6oO12!KcOlJMh?KGWg
+zc_&;W&|dZX0I3l!cQ@YK8T27kF|Y^5G6KoOziQ3?y}RG4*UC4x0i6E<e4(!LxiS9b
+zn=e8v0<1Cq0~-Kbe<)B~-V78e01EhChX`Eby`3`#Vb%cF82@c&w;#OL)9vmxomyF+
+z3jW#n*xy*08-M^`n8-EW+c_&tMUjWbG9pQg|9jP~Y_Znp_5$Mo>AL;iZoO76<>!V1
+z)!yu92huA<?*3(nZzn`e!S%)eu3!G6P<2`hvF+a9ZH$Kkz8V{XfRW+N8G!NL-Z>#E
+ziac6d|KD$pXZ>=eYNOkq5AdUYud9Xvg<MvMEX)7E#MO-_c#QXU&b#?$(e=f@l>gSK
+zPDc6Jiqq=OHvx*<YuBA>h2=kB>itctcgA}==iOXYd|mP1*Y*5+qcMP<?#q>`^{yM7
+z4H)zK#-;&Cs~a-_<Gp=zJUP7SO2Eg)GJ-MZ|Bht0P;Tqq-fd3D07}Veb`GTsE)I^E
+z8U`Sx29H)R0)~lyDR0aG))N1+TM?q@_|tv|&C1qjl26N)tM&cGOn~qQ0&Z9XFy7lY
+zN5$0Ft1F7EC;kug^`FIt-vYSp>Rc)CY_Znt9L&c2$GHy=q}dG_fbrfggKt-708fl%
+zL~Y0as-Za=zq!ig`!zN5m#udEj=tZT%>tC2s?*k!1d|^GFmd&GRR$0;{=FM+7ELbx
+zM-J;dPG8Etqr3dVC<&1Lz4<YK5Mo>J4{~V%fJN_D)dC6`|56U$u6mhd;y<9iEwav$
+zlwRE*^H-XqT;FZi=CS}SS8-bR13wQyTUp1~cyFJ9C%;{FCE!zI8DY!uf4{HldG+_4
+zj(_d%cHMQQ+bH+}UK=F=vcGE>0|+5<RWAPq77SMG0y5s)V|KY>DItmYcb#&vA-%c~
+zH7UF5)~}r2&ez)UyZA!={%CgJ-8GH@9P{S}QcFk7`{k4O7V-aaMF#L?0{y>R(UITG
+ziJy0+TURrGIdz?%+Zv4{eqPxfKS#H%X9j0vIr|G3tjGY2_jWC@VkzO7v5dIg_`hEk
+zqTJU#f9+8AD=N72I_>X_uK?YuO=G-Mn|t}1+7JX_-o?^20Gs$<v6(1|`0tg4D0QW*
+z3Q=fF+1^$SKv8%3`{i*@UusN}e0R5||H??7tA7Er56dzD<Go!=Ej>=~Jc0gS#lH&t
+zx)7r3%0ov7c2REt?oBrTWh=Y>N`NP&+jT~B1OATyFd4pFvI)Q{{=KCc!1JN$UFQbq
+zOZi26yJaD=4Jo^7%g?T!0#pZnO8e@iyS2$r7o6!rpWAW#<pCk~OrHRNTz;3I@!p=L
+zyup%0B9Zu4S-#`yc>tl-@*4hz|B}l2J%1~pwpD6Qk^nUZD5}3#8LbTfSoC}I0Kj-}
+z&k9S96TC>E|JSp8)xLDqz(03S%6`?4_p+Y!>+8b+zHD{ho5p*`DT+KN|AFO(=IuLH
+z@qZ-cx37&e3Fa~acH{q!%H_*FDVu8PuX-Tmc;T<C2mHYXK<qdN)6>6h*Ku6-{{u@M
+znQ!wp*6m-#TvXJ2jMy&z_f`C7yV4&BY_+7PM*>P!m-Th)`BDF`l$*a^^*I3qy)*UP
+z*6}Ytn9czt5&wI-xoAtzU;3}O{?(t#mcO;v)gyzkT#aJiKxn2l0At<Gm4^RmXh+Ot
+z1nm0%ww}pXTYmM*-*!VvuQ^`f_X~R;wZ=Pvw0ylcO#%R{a=y5M|HMB2jTwOX7@=kS
+z>(PBpO1Y<_yV8^LU^E3NvNb*B@A{3zShmWv9}v>Jg`s<t_?PF4MMaZ{|CT=2TXv;%
+z{XD-RrR<EC_l4g8$i2x{KrQQZXY2m}Fk9RObQ+=mm&3)Yg%gQ?UFEx|l6t?_FR6RK
+z{9S-*W>D1w@ucj`HUOf;zF*)*YQ6koJ_9&4*6qE?V4)b8xr~6__}`!0%c&84!|&VG
+zT!7jY=*v3(#@|kLrV!}%<WL}hmFAD|K8O_m@_as#NFx3ly8qWfzwfskWi_^+OaY2)
+z{ZNkp?oamu3sod!<!=mN>}qZoP{jC`^BI7-jDTJL?|1sbaXs17hkyOH;7}(6y35bi
+z{Y`(pz~O(D6#%%A+97xOaAqIy!)X1#{ARWt`67w<SLgoJULO_EqpUx#Dt~vT%}BQ4
+zclOh*fK_^bAiOs-tM^gkU!MOa*p8ee82@E80XW|1Q<q254Q%``w2t%;;BfTM{G$N?
+z!nvB+1@y>Rw?B-x!FD8x_#bcf&8gEq2cw<7`t08*8_=>Xzr%MMxt|G9)MtYMgmn>I
+zy^kLMGcyS%<}yOlf%|Iu{Qo%qg<j9|Cji8jp7U=7Cj56sJARJpd6D-E2LK2y*mFOQ
+z-2cz4C7zheh(wEjUB-7b86fgqDLpqh;jb!!shJG7RUY3703fVj&mBGfy<j_%X#7{z
+zFS4f>164r~mG4gqfGXwjpnqBh2tZip(=~u6#=70%1lo}ka~UDK{(s!bm(<%&w*Bm=
+zXm{(M2QmmI{eT#LH<`PO6aRs#!imOzUiIsf*1(?uI2_Ff`1BG10DGP%2b0x%^SwP`
+zO)3hUn9B%R_5b5)Um~k!_&k3%pt=G;SO01SOMi$eLw_K$$w}bo@$X6L4PT8m0i2l2
+zh(wHked||u^20T?;y0=W?#tGQe;~RyqriO@BmY<DiGJ(9P9pI?8RF}JcPHn5^7|h>
+z8E6kgp}|c*Kn&x#yXW6TeGz{r{^(wjC1nIAUHA?3GQPV0%cn|zPPPDx@yY*jLXfBP
+z2Vy$&*8t4-_E_+D6DAw~`q-arkDG&0ZSP)HuK`p?8vp@Bb>#UOzzgHOT^9VR!imKH
+zq_kgNU*&Uu^1nxieA)$(tu*_3^ACVHuAZsXJ$C&2<$zDj#|W*){|D2*?dJpI{Q#pC
+z0qHu`>E)jQ;?Nnu%eei&e<}Ehc^mOGqF2-L-kYxQ=^enbKHdW8Uj`y&U(X8wh;OJe
+zfS1O5yR7{2>GAQYc^Sbj{>P=hg}(z>?oLX7ifs=10Li*~nn?W1-~T3=_@8$7MZLS=
+zV7wrZ&DZoEAOOiZe|Y>Ve*Z7!>*G`NGNM)ge?O2T^z`zgE&`M<*Y5R?<k83Ees2J}
+zj`!;%;(zeu)I5z~7608p{QD(+?}=R1X?Lmc1tjmI96n1V{^i+Yb2DNU|D8bm`*l9u
+zPG7}7JwK2<Ps%fM-9B5xB`;$Y|NEo(&zGx?U*pH$VhCV8hURg*wV^7=v#44QM~8d2
+z<~a3cyW8ulUZ2<p00000000000000000000000000000000000000000000000000
+z000000002MPmi~`ANgo=KN<i4KXn^C0$AjRwD^+~KdIjrSf{~<_Z#cX@QW8kI8F7l
+zZlk6-PQB4=?REQ}RR00s8$3JSSkDa)$twQ))nH>$C|7Gvv%6|&0Hn<MgHJgAD_g+^
+zK*?tF)keE}$mAlRe6_Lh|HANqV)Xw3<yyT<9stM<&H!E-9*<r8R{}9VD_ba&3II}`
+zZE6Ov&iGgI&b>bW0wC=+H3Ntr|K-_Ee?hL?JV^V~N2+<7n*qEwJQ%z2|4s2PgeWz7
+zhPMII<HKfV0JjqVB3o%qmju~zj1=0;4B&R+UkFjzby*ESdJUdz;v(Qzh6j@P_+KkJ
+zeY$?6*V)4jYyfUA{>4^#Z<+)EDKp%}4B(C7A*`qW7eW;4Gyq5`PhM?c2JpskR%dPT
+zFS0eZ1R}LIa1G$C;bE*V{)H&-8{QB|gW>Cqn*q4(_!s3i$Aghlo0kE+Gdu~q{=ei;
+z?}wIex`vzsNP!Qh8#V&C{rDFJ8UUo!@b$@NH307o4`RLjzYyCj10bdT_;|D8|AXN<
+ztULZiuE{ze(&=ooGJx3ee_)&cD@9#85J;U3%K&26|2)_UJ@Xe(*h}4m2b9Z1b^)Cx
+zG>o{T_!s34|280nykyn@o+PxD;N0*Ctn&Y8{l5?uN&+C2hOZKs0(^3jOi}SWi+|xT
+z2Z&U<d>X$2czSvMDE_M)A72=rfK~tBD+JPd8@UDz08;5g{K$Pe7`{znE5W7V0o+df
+zi&EF{-oU3Xeg^P#Amxkr&B*b<@MYgp{EG^efsslVv3CJI8%UW%25^`0pCto8I=zp(
+zeE00ilk#2MS2;euGJOBH)&GkUi-1Ta?`6!f`*Rhz!?>?<d^|LK{dV!6x0&>tQ!~6f
+z@Tv1+X8=0><wfi@fcWvBn~P~1+wD*NNdxnA9qgE6_ZR-a{l8*n04H}F|Dwt+Af!^v
+zvHJ@@aAUs8oyY%ni&`K^rOQ}j_m`uNdk}9W;WU2#zil(%Ur=Hb5Yp$!lf$=h#_r?z
+zkC{h2h#&vig_yR|W&nUxiggZPa&K?Enxc0f{}nC=Mmk-_xDe>o<SQHeHpWuo!#nT)
+zb8W5#L@FJ99X$gG+}rtw7&i<5$DPN&s4)Y8bh?VZe<u+C-^M5f@aXR2KgTg3q*U|_
+zAQ1oZo9Jr*k4;~^-TptT**=rH=`#Q+5P1z?=HA}3$Qi&B(|2qe|J(U3Q(T8t<`^JS
+z>gsv4$-6IR;y-##(fIN2w%WUU?RKkC%SCJj3VWVp4gjeXaTn0Z^xkeYeSQ_S7}!(O
+zmu}VnPq|&E61LBuK_xJx)|*IGd;;;WMa=-7nZEak@h_$9*2Dg6P?aqJNULaT0Q2!b
+zjMj`K8vlA7zgM&054_C^08;Bb$}XUj-_3nrgJ>DR^SPJN!uH|DOMLou`+@*Xd1U$=
+zKng^u<9YIS{);(}v<C2E{$-R{@h{!Bbpt>d5TsX>HGq?ad%L4$0Fz?`LGj{W%2wDH
+z7%Tlc`1U}mM5yDr82@q*Whrqj@$cTVJQJ9w4j@wOt@S2=)Ax&C*JXqZV0w%wAZ+(-
+z%>OmVt^vp{e<k3P7H#?d)NpUN7hw%xP4VBe+z8-&(vKKe%{l`x#ebBg#NaW4iTM4$
+z?AXl#*4P4!6dS&=%m7YJ_jbz*>!rkX#lNhL=k`M3GGL_I&~o|S9RKp2?PkK6V+3Of
+z^#8IG_C++V0z|r<*>&BgrhB`kyt2I#aBcD5w;BMj0DyF}T)tlt|MJ4J7})d}Q9#(P
+zd*!Ts)8<}~>|WsQfz<Krj_{pcEcu2kGl2EQf3FlO^B-v~`E`Jlu-d@8H2y7*6Rj`)
+zWi4l6<xm3n^jT#94=$H|A(u~VmJ$|@5h#g_{{h&zdKx}*m&d<+AO2O2kH0p3K;j>`
+zeHIzOgTc~|XH^Vr;TVx}`|-~e0Ko98(98EL;$L1^WB`U^1j)od5e--he}wOWfBm=F
+zS@>&3))xPEj%Y6cc^)=$jraCVyb3!7aI(hu@7Eott~Bnolzpw+Qz-WfEb_u;0ITEw
+zGVDy^iQyPwGUI<Kdj%n~+O}Q@ENI0YrKDB0n&UXmE)~E4FKijVhbzA;FKh;|&iL=z
+z)BxZPAVA8nx%=w)4}B@P@fdMJ^Z%W!MFYV8AEch1GY^*mJX-Z-c`|G{VDmA;WY+)O
+zPSdHDcfvIS?Nz@IkQ(7~cjLXCK_5aD1AAaBBalq|tJdt_yZfzrt$bq}!1*7*7wRgX
+z8{=QT`69$3z#8K}umQmJhXTdr%|MX?pn&gnh`=@8+c{$pW({DC@!xiK`@w5H-R@q~
+zsg?Dq;Gd0;{f(8m0SNGgiCp8oowLGJ6nSVYBa+1UzgOML7Hf@eFE9>}uG{bJ)@$Wb
+zer_mG?ah96AiYB5?q7!Zc0$w?Twna}`sF_gRj0KO+wT3{#&{^;tFa*n7#ZH20T}P?
+zofD#>$fLFO|NZ88)-PA8HoE=!06*&Yx@ss;$Yq7dviuKBT-|tr$9Qk&yqj+pU0?i5
+z`EQNtWR#z+IIZq{6QH=gcHOB~SpEa1-rux(XS}y_-py6T*A@SLUC+Na8UyI*zFetV
+z@4CU+fHALcY#M;Hx-kPV-rG0Flf#>?1bl2PBN%i3??`qF<+kqa-R5)*pp=|u=TOSv
+z;^2s>VE|HU@M!fSV3_!q^2Q8cE%7hA6(Nd_KkawWtZa=Y`Lt}gTHjyH1PFg1;D$8-
+z<Gp=zR7`!nx}wN>;{QNj|5<GKEr8pu&Xoes7HiGU!EDTbocr)Vn%$5A81L;e_;z&$
+z@Wfa~)OP%@8k(c=o2y*DUsE%G*=on{==-hNEI`?*I&D2kF!@0M6IYK{WdI@L-@D;v
+z(d6QP<gmWu^rh@Oy2~$&k^tG?n;!!RA-47YAeR;ZSoD5XEufI`FXiy<s+UP7{sZdU
+zBI_JU>DB!)f2BFf_1$)DE(_3d6{mGS@bdt)m34fL_x2fh^4nEc0zNgC5w;xv_xq}z
+zSAWmx_}Bh!*Iie-je;NGwNVlv`@4oQfDj^A<??S}!C=KMAmhC~W|u3L5|W62*C`hp
+z(yI$mld`LB{mSX>e61b7i!apgk7oDXUE>(QF@J6#wRFV1Up{$n5&s`oWB^|#(Eqy?
+z9r?|i_<2{lbv5&sQ`h;qt<gB*=at>@b9CE!W^hK9v%i4BiVVPbZ`TqlmJ*&B%ZS^J
+z|NCVj%6;AQ*A8XBqJlfG)Beu*3ec_EG{!r%xtFi04M70rT`XM#u!;W_n~9Q$|6W;$
+zQdi2V5QVms?QPWn6m^%sUmo}LrN$)5cXw<0uZ-lm`WG<!uq*>G-rKd*(&Gfr6X^d{
+z{HwsP3n8kmJalwm7xf0<-emJ%wzBK51b9-qU1u~m;Qt5!li|xHn*glh-&>jiJRh3g
+zb#8#ZlwY*BTNWbQkg}_`{Osx}Ky~1!w69*eTbulJ!I>`fxgEz}9uQ*B^a%jS<#+iR
+z@9kO28!SmA5{ZA6<vXsP2M}s4ui<a_FR7g0^S1(OTczeC2~cBzqWXK4(b@ojMZY%>
+z0F3wctgz%b!HWd?e?7}r?Mqh;{B!rD>{tDGFY8IazCH}#%U1WjX}ouwqR4adA6RZ^
+z-o9fM|3^}O``S2@U@jwIH~#OaT)y0svZ<E-ss~bz7yin6z#nV?#Ex??J^kx;9mi$=
+zKd{u1`8IE3-Tqa~MMcfWi0$HkU&Vj6EB%4MR!e$%B%oAvSzouFANBuAx%ul=pA$gP
+zJ5$eX9slx!=^Q{3@xP~=i?;OqrT>cSU;U|U`CEHkJu(=})hPB2gl1X;FxKr{Y51Rp
+zcEnspz^?yq>zRDD<yWu#Z8xO!n&TCIzp(dFYrGRk%h!9;BmlrF=ZhQoPweC0m;soN
+z5n9H-9^KcZlzTe5D?KR>MpJ+yThmkiuHQ(EWvfj40U^Cx7`jJ^e|f%GR5XeBZ|QTr
+zWmihq&+{8n%FcLsU-%7x+?#9#)Ur-@w*C(Qv&CINrxE&pIb6J2IFb0*RlbWVsrP&R
+zlDhZH-vy{<230)}Ps+}010YK5`vq>K*2^#EGk{ZL-QJrF7K(wH%Lv$w|NY6moEp(L
+z{Jvey1*lztzO3VK{Owd{3W07<4g~^OY5oZBgGli&&*u|~B;voJ`+ptu`+mz&R%83g
+z6rjk~5A_J({&X*}P(?yk{>A{tuI6?DMT~zrp8=T52-x-iey1-S*ONVc_}6a>4s|l1
+zyZl_;-}KiD9R62X0e~B+9defsXZ8U<jMo3lZ)V$(FOrCVb?#5?^-%#m%KG!F@^@$2
+zjAR>rXFuHvSf%#|!h18bdLK3Z<@s-d?Z`=j@n2RGfa8rmb$KM+z{dYV>qrj)4oCmY
+zKN<iaoU55#K#z=d`@?t}Y)6ua|M6zuoI34uFxu&>&;E_F0WI6|JAAj1`<W0$eKr_C
+zSQo+7`{?mMGm~&)E+aG@xUZ(q|BvHe==D5*0zho(IsaB*!hdJ9<L9WJ7kR&M0D#bf
+zJ@@0t{r}8b;)%J8NVNFZWqe1I0V3a((sP3o{;DFFn#pim<?)>W0Ky9P+|lFT3$`PP
+z#(!1)B71r<P!$AG`TnE;s8Sve`ln@p0EBfuT?2SxtlJ$<pdC3eml3k-|HqwtNxl7K
+z+s}@QcDMd{AcJ7i4~XG+lexP%@gJxvoM`;#Rlh!I4g48^!_j<zPcIPwu;+PlFj>7f
+z-`f+`q@uuyxr~ri|39wwC9-OU&+~T!sw)6=^{-a2^oOW2^amoFoCJ;@|DKfI@YQG&
+zz=^qxNW}Qpw|;deKU`BQexqvOzHE*72cmm33fyNg@_%)n=(qmsBohCVA-)cHcXIA0
+zzyHybf%ZTY8r<{)#4w(_d;U$-7x8!EkM0#&Qbu6Xh2KCg<E!hxe5&;4WDBqupZp&u
+z1bI4tAf_{a4ZwVFj|G1>VY2bBkNwH^xH%Zr_U={n8bEcl0T4h`N1mSnyfEI|Wx=m1
+zoJjmnO8e#YRX+D8|9f=Er(F=)O0%yw{{V>N>X}O2W5>T=4*0};jL>TQe=z;qem*eX
+z4=`F0kgijmUj7Ln4xItKjNAYFmx7;|w-HYxdNm#Iz3B>{-T^G@<1K*xWgt@a^}GOp
+z_=YM2cxk-1%gP_09v`2Yml5pZe_ZNY_&b2*?xggm*yf-QkgThxiNwGB{cn<q|7mw$
+z)Vm7~#tQ=3d`<5G0+5{ZhsUqt_y1D9K0Y-sBU<(U_X9aXPcJX(B0%|a?Oy*#9(_#i
+z_XeQrc)v~}{s&J^&C>{0@!t)^zhBb#p2$_5c9#lYK=MAy;j={IU!FZSHzQW@-wDLO
+zU+2^9^i}NB^8?BAq&zd%?Xxvp@-kNOzdwrqe7WlQHGcdph5*)MXdbs)8>)gli>l>t
+zbhvkGj#F>8yS={Z^@)7|000000000000000000000000000000000000000000000
+z00000000000002|^mv>5k&ia_qX7W$Q@6n*fJJUdi$6K>llpyubsBtlzp>5?zj#rE
+z(^Nm}HfoyV)Emv#UbpW_^&bGf!L#Fy_1y4~tm4044K@~qa<%3(yQ_u<K+2py_=MxX
+zvK4Fqlx#L%ZM3_GOfCY-R~sAuFANVTM*kmBuGPEb0f5}#4B(~V@z}+GB@pwovV}6K
+z03hYrre*-^jDIEX-0Sl%0Mc$#Gl2N<U!Lvs7v###gS0<=q?)(68Nh49gRvX`-xU8s
+zh*G0xcpD%+K5S+Na4YdIvX$0!NsukaNTJQl0B$G#g%Fipm(>8I*Wk$}E&_gKcp!<7
+z|Fxpir|U<0oju&Z2H^JMUu>24rbz&hGQ&;G0NxlL!g~6DAw;oG1AvtB<kbdd0B;Ou
+zb=DUDB3oliAW~}s*8tuc9>)6OUx@O);SGT_7{1=P8Gzf4e^G98JQyjpc^SYv!;`S<
+z|4aV#erWloYsfi(6!>tuVIzRskAG310YFL(U!QDN1MuGPAlBRe3$e{I08;9Yk2fp+
+zKNz0Fy5nEunydpNoz6BZ1Be~}2e$dYQq-jbfz;Ws3?O#>&x4)NGk*bvz0^H;K)Fn0
+z7tm=!!-zYIe^Ku6Zv#@uOJ)t=NkUr*&JB;iD*unx{|ix}Bmh!r_$q-Zz$X{U6cxX-
+z_!kayfJmjwr|}zrr<doC;=juA@rB_DSoQzCLLjZTk!#QZAeBDEkKCt&;oBs(5?mS{
+z!0p7pD0L0*4Sf3IX8=zJQoe}aj2sUPU-m7<zo<|d7^!p-dl%5Nfs{#P0CySxSuy~m
+z)BCu~ch9aoDc{9?mE+?p!}ot%{l6%&2#8ejUd9}|KUaY}jQc9b$3w%{Zx{c0n@PVp
+zHN(3DpE@sg2B70#Uc_Dlh#&vCxtO-G-Tu^{G%!!s!Hzk0f8h_@|0`w&aB{ctFRJVU
+zLMp`^yT9-QH|DF{dHip;s0D&lx{Nh;e>v*72k}-CPUH9g+cpFK1tm5CA$^WKIeZ&u
+z>^_eFn0ds5`0<}zh-oWr1^`H<SmyvH_x8rCDSG$uU*U3Kq|;@L3xQruzOun@V=N^;
+zyz~A)*XCM4q|(vX(KCR+y`6uEakKD$+<E+q8Z!V$r>p4ucLMSMZH!U?kM2JHa~uOg
+zN=45A0`V`uiM|H#*!0EQ?f<iy?K7#HJ_C>fk=Fob?(IE`oB=#BeaE)(zn$MQ#dTO^
+zjsYU2uAWDmy!&D%{-f6vjUWGRtG&C|Znqk>T*OwOu;)qU0FX)%cLAMD@9kF8=T}jS
+zfju>S=~n&!l-qSGVf*|UR02b4y@^!CClLQy)C}O6>3feD|5D0sJ?zg0RoMc7w2HO{
+zFdzTJXw68X@vqnMdo}z0z}u_<Ahph;>;gLZ-Q4#zh?W67pL-cCY#(mC#HU}kF9^_-
+zN2bpKq(GE9o+oeTznJq#YXC3iUq*=)|I%$+Hvp6YL3%}512|c@w>w$}FgZpL6fgdz
+zY=wP+vC^-DZx5tOggTy!@h=BamJ-(z|L#4@Gl6;P03yZST5ke4eZTm1T}H?NrpJf^
+z!gk-r{9kkI8i4HbR{}n1(U$K|4fl3?5!L|K6#qTTjR4Lk{fL3ptTO;p{6|?z3?3tx
+zh~NLqj@=w!jV-`PvEdub4B*ssZ@0X#UP@e7{L9*SZZ8xr14gP1Etl`j@h{)mZYG>L
+zMlhB@|1UdXUqs_7K&0E5UDthTy0=@(E88mp*B1YMs{sHD07y5><@+V^FE1>MflZGQ
+z1%&OoSI*iuZSDoh?gic+NFC4a2;b?&l5fZ|16W`D_e!BM|B=>`Uk6ADs|~zM<KOZ)
+z(fZ<F)^ZkB4kdt3pH&9%;Bwg)a{0t&DPiFlfs)AhAApUkr{N=adHl=w;a}zW_-oS#
+zB>sWhXORIs7%csGR>i;;ju9!hAOBnd01Uqhy?nnS{^f;524FZwkWBm&(SW7!NBAE2
+z*MFOxg}+v0ZSimCi1q@I=V2q)cyHgttFTi5Cu@xVe%*2EO5<Kj+1I)~g>t{ZA}?$P
+zusZ%P!_Fk07>*GpGya#dR}dnrZR>@=f>zv7N?KK`IgaD(QUMI`!j|!SxbnO5!e#*L
+zjQ_4p4FK){0;CL^yRVM_(3gT6j}a#{|KG`4Gyv@XLF(x_^Kco!qg7v)C&QKlHXkEQ
+zX8q6YG@WXBCtM@YUiJF`sSz%BH{RPB^dVF+um{F60?EX`YR&$=yWgtU$~U$Foc{rQ
+zp|0||G5+P7FG4H=tTFxr8vtB?C{SG93=}B<3iw`!2wda6oiheu)&SNR|7~ZtAH3Gn
+z?d~<5T3Me8{@M80-&mO&fB;{Z$Ti;EIV(&>k%z`IB1w$@d)2LMvDWDJ0^<Pby8Yg6
+zy;d&e=Y|5+-t1=w(kn#n{$+@7Cqzxb^~L|LU;d*|by^Ft?cU#QjE4fg8XJOuk>Sl5
+zfbrhmIUy>FJX%}--*1j*{c@#hquZYk@S}dOtA+xFTvmuI%m2W{)r}{3jQ4iVyZL6(
+z^~JxG|JJBZM)}!_)9TJQ0gBse*PUvG<v(ER{Y|TP#(O*G-CR|CUGd-7_56FIF@T=#
+z%ayA2t{a>U81wqZrU6K+8#4goy?t{$IlSpgz{kcif-&d+j%2q`ZtLFOZBEAkO37(<
+z4y6n(4vv@_1|X#dk5(@NhKYYEZ_EJJ692MW5u)h$(|!ld%GPL-Ps^68_5H<6fba(b
+zZdd~_-rF}v#njiUD~hZq{txu^pT&mX0=Vt!Tq*EuvDWMy%*Oo3xepJd*$o+h@!l?j
+zZ&zmkPmE<mZO8wrp*b4Axyt4HH8t~>t#<s5zTcY70+gMq)7Fy&lOF^yarJmr1`sm-
+zy&G;8O)maN4(mHkU&_9tyZpi^36TB0`7wYHVq5PIa%lm8MekSD0ty-bQV!p)dYNS6
+zKcK!Xvd)o|Ufmz_SDK?--)-0CvH&etaa#8SKMz1#S;yCSZ=ZoDzg=}D;8SB6VaxG<
+zzpv_f_4k~Pf9>yf-F2ngDEI+h8zlj<ziSu+2qAJ+F8>A=3|8y{GTz%`cDZ6HA&K~R
+zopP}uy}A%JDZA>{ubke_*V^&B_(J{uXm;P-HI4xs^XCRqOGnK6<&*ao@&9o}2JmG9
+z{l8n$k>AXTpLeBOS2KS(b)BEv8jT}<UfCT#N4KqK24`eB`wJMX$N-G@b}g}DDdCy1
+zjJVzSzh4%j+}AyS?NIhBD!B7H?eC1Q0NtuhW4u$Fd-<B$5CmY}#nLqZoA_U`nJ9_)
+z@0Eopb)~EdQD{rq-c}7jQFr<K<#A76YD|)Rcekeh%1EB8e*v=(%Q67ty<JN!Jx=gE
+zf&O2`zY6@i5TfeJLq`X8QEve5O*a2!E4%(mfG4Hfbw+ao{*M4K8NOVy3BW4;y`>qz
+z^P%Zo=LYCY`9*uXWg)T+DZ6UR&#s;VR0n=a`|72;waHHxoasWJ+j0Em0U`EGp8$Yd
+zewUx|-kznr!IDHGk@#0xzT@h70HN0M8vcg=lFIo#e=DH2RccO>05t|Es=rqmtqlNJ
+z^n3FFz<6)Z3QLX?yhxz`*Ry=pzI4^VKX*^ce$|invYzzo>%#!PY<1t8#(T#piaaO(
+zf#rtg?K@WSe<bC%uZ=Sa<}w0y<NuDz<;y)On`-H=dLZR^;jgR*{J{o5>^KM0)4y)l
+zaa{KQ14|v5Z}T?R?O(-QRMdQo*e?F}Rs3hW(jN$HwWOy<0!mev^>yp{QU9-$o4;Q5
+zIRON{Gxglo@h?A^&H*G5|9iT*XiLvu`mebD)t}0izqQxZBZIMAjbh(GXr?s)W8Kb`
+zhW}}3N6cje?E3$<p2=5Re)Y=Vc0)?9IbPxS3ws~6#yf$ue7!eK0syRXzPN$^#6JFw
+z8G!j1p=JE*(S1!yxu>JM(v$LFGzBQKH9h6;`i;a`w#u|05YoGap?j40m*<N`MU#mC
+zmOj^8cBORvJij5O?2MQ9h2H?ky~$QUE$eh=>;C{STigY78lnG}!^NwG6N!Ia<-4eo
+zdcW5%se8ZtU4Uw4P}KwRr0mQ#0HVacU*JY+z5HT612{F-?Y+rhp%|FCjDX$v-=Eye
+zsS$m{@7vW}fZ7%4%R2tX-%fR=5a{;gP#}Pn=8y0`h!p?wd_Iv#BK{k?|JOmk@3$Of
+zHMXBj0g7z>P>%raPxk@~RU~BPZwz4UYHk-$#Q2x<8GyNrfL;IZclyF{J=xQTfBm-L
+zP$vVr%g@#QO@F<>;eVAC0JxFbA$R$3W*_jwX#KzZX0{#qB8m7{=l;}Q9~ID}tUs?R
+ze|M(MNVeg3_S3C^ReFCQyf-te_fg|tp8qD;j+`VI|7A4+INs<}mq*eKZ2T{@j`R@V
+zaP-goqX7WIxtiGp^vGDZKa97*b|i`TA8+=}snb3Oqn*C`?B6IG(6TMR!*?6Gp9xXa
+zXM+KRbrD>>j~@RsGYKc=GD6dV`)d09|2Y1IUeEI<0K}G_^KS(v{C7q>evaySk@pJ+
+z00=GEb3cyU|Ie%?o|wysM2ml2#&<LsAo5))JvTVvuPTD6nGCm89^VN7Ago}|9X<ZN
+zU^|j%{8!a4vZogVRY4Gy?@tPVD&_H@e_93zKv?I~HGn6^y4~Rf+L04;86ms=f85EJ
+z)Z0(C{p_e{ck7=AG6*L9fEa!^nY)V<|ADH)iN=3k_3M+?z@Gs)9L)##^b!F8d!8o;
+zlhu3ky**(~DhiyK%LrNZ|Kn<3BCBTjJbyQ!x&lB~|7rzGe~2nWe;~5SN#N-5?@8$m
+zUyU{aoS4gqM2vrZ>sNR3!!@<yH>w8i%hrg0Ai6iBz<m}Y|5xXUe(S$ZBJn>N;_HBS
+zC+B|h`yV|SXb(i8!A(Cv4CA@G=ifwq5q~HC=w6W}WdtT&_zm<jzPkR)r%HcLwg8Lq
+z$^UUekf-wpVmkBJ0L=IHSnzifCL90y*q>~Vn}bnp?_O1}0aQmD00BgG<oOxE3*)_A
+z7W}HhiNyb;v|nCd<#T`Xzek6B+69rVH2Zq<4}dtXo~hJ5cKrM0fKSZF2(8Bd2h+dp
+z=L6&Y0HYNF={nWv<(~lJ&>6tXxc$F>Dfo$b8}T%vSJUy{o38Nb9l)|a-U8@f1|nr&
+z&kF#EZ>TbWm&SX$to-rm@$sp78Nn|8$ECi7zXMqAPD+1@Z4UYX$+~))Nc_v+|0bFE
+zpLX{}y}RIGydaRx*YqAB0LeLjc>F4U|1ah1<5Tl8qE-KYKaeBz^zx!E0+cV;?)8u4
+z(Z}R|ZveWE_v<9$fAHkgJdI!#|J^|R`z3wviCoobcd76NB=4gfK1(G2<=JC%Gh!A0
+zok0Bibw1rrU&TH>Kaf06$}@A_K3l^jFJl$|`=j{Jm#dCn<Hz4(2w**i=5f2Vp(@C;
+zs9Fw3hkLi?IQ3?`+v}@dpV$Wg0000000000000000000000000000000000000000
+z000000000000000006*GkGHuW`Dk-L8UO%4bsIbaSmcJZ_>&Vqsoxh^r@@E!8|%#Q
+zix)*WP4%;Gqoz4dz0qv#b^D%F{{i3|JUiZ4&kYaBD*pS`U}I4zS8GnQyJ~0vq|Et)
+zPdNT7TfqiE$!7D_M!S2+<RYMawXyO4!tj7%^#1|nTD?mi0LTr_0A3m%k6rv%0x>@;
+zTPTwX08*Z9Y6h^*_*e4Iy*~c}Ani6a1Bf60<=IYuL9X09Nc+=As(G860lYRm7`yTR
+zP4O>;C^dS9w*k`Q!)9gxw-Wy%TWL*~1le+o6xz%T;CA9)2vON}Sq(sX4W4Y`BH&ks
+z2a@>sUn@F&x_+eB*~1NN0B$e-#a4N5ngjqTGu*@s;EmxStf&7MLKN#X07xlMUTt6o
+z@WyafXKnE>vNg5@BDFSf4dAWeVXQCyg(&YE-VjKG;p>f?0l4k>7v(m`gOO63mjS#p
+zJPEu0zvNHvhn8=;hMWUPfe)t}HUhZ)_!k8l0HoCL^~q*60PhVCV!i#p5Zf#RAf^8J
+zc(daFgW)->JN`wk$vPm?>1?wyfY|YWV4MFdMO``&NSzJK0AknwJlF|6^A}LqOWlJ9
+zl*>eR0i7l^jJTut7v&EBHXwz(WYz$lB(#;_-0%pj^8aZ4zYrBl0w9%!uM(I7d~%UY
+zQSm#Af8j6(h*Y|K8ovQ}dU^gR{;M1xUl^W%RsY{B1k!pNxdsgYQt3nd$bC8(zD;5)
+z!KL8=+)n(9QrGa_z^5;M2Jmzs<%{^u$nn7NW#3Z#iwc#2kxCb_cL6;cNSQ<iaF_9)
+zB?CY@y^p(m_w34(@?G3lIX=EJeE+xA|BDiffJi0pWz4bra}~J5xUX`2JT!d$cJZIL
+zne>}eGrT+Ssq<oI06PBVMeH?z`0<~ci)kC%?N9wl1M_qp?3iQs7yiKgzhY(pCwCkF
+zqRK8Hq*BbW`wKsCW4_9r$NzSVS|CWJ%UEOgm!pn*5N{>nG=BfTZ8P9sP+}7h(&xyN
+z!?$t9?&J86nMXW`AOG2fn6}bp0Dx4Abq-*1Z*RPsqIVzv6)p!xI$g%N5a`w9D;xYa
+z#!}+LJMaH<ZLS4GDjj_tJp%~b+xdqWHw*vAoyWhZF#~{fx{AJkClLSN#wZ2w=<ee`
+z$1xzJRP+oW5dZR<=xYFvO<%m-{y(ePK9joXGXN<Nc@1FZ-rlpw8Nd_McWfK~+xab1
+zT!&TW7$8#W>Up%uyDw(qKYC5k`0?+y+Pi!0cB@g#MQjBMd!A$t0I3vl7tqP{-flI0
+zeigMC*i+M&Zq@%!xm~9cw$GnIB`~Dcn@ClB0`ad!%>bU6zW0dnFQx3(!~Segl`Q~B
+zt7vNg^YK57){G<?|9Tz2SF_&_yv+&#QtLd*E})a&&3#{kXc@rsxtGzx_Tk1$eEN0!
+zf&fi<WcnOH3Ph>ndGdDti#d<92JmA3Wt3R)FWt6v13(!Nq*s(RfRlxLyQ5_QlVb!y
+z@#0^~R@fI9EB!k7_CTscsN=a9|8fvzDRC|F@7}XK6PTwCAX4nD^(KJR_lsZGWrPf1
+zdW<L_Z1-)<|24<10mv?YCE$}5ZTbGxaBsI4VGUqS@!zxD2;h9uj~H0ZIs-7pf0U)f
+z;4y-U`2D}^*v$df*aD0c8@{p308UN!cFPOvrNni`zpRbt_Cnz@V5Hj6a{1mI|MH#f
+zX2O|c1Y-&G|FRSIMKrDgM7o{Xb={|?d%LB)vb_>;ZSmi?8UU~WfONB5zF!jm^1`wh
+z*z_1tK-jK(<*a?v=3bEOUf}J4)bZ?&@SR>P`Gzbrfc3?HuM{ftA89T5b%2zx+Q7Rs
+z{w<FatuOv%EoWinPy+b$S!DnZE|+~Fmrrb#5*CgTD2a^!0ob^D8a{HD$G?0Z{#A~T
+zzczh9;vcwu78$^U!P1XsRSaz57?E=O@y`_i!0@Zk%l9kdUtU;b0ES}($;3Yq4Oj|)
+zgztfW{kPd!_-jSh7XNmRXfFVH9yW4~_x4S^3OfaGvc~xD*Bz&>H14&OeXZM5DEA92
+z^1@~StK<JN>`dZ`;TT~u<9{i81tGH9wq6J<XvH0+q*b+=<2cSP6~F*5Y#G0YE59o*
+zYzDB-`0v`(0N@TFK+3SW`|9`)eJQx{7;!@L|DCKw1Hk?tq@JEL50?QvTJ>dlGHf|u
+z^D)9?*8kj2)2Wts!ZiZzRlg6A8sTzx<Gr0hA3_xadtfXhkWBom*6iQA`>lGdd}ABH
+z`5(X+>MEZb<6pk{BE%xV8sk5(0l@W#0>$OcK#>BVfbVsPz%}06Ib#rJ4PcG&-*$HU
+z!D~I;?q1WWmG!CMpN)_Gjg`3p2=Il8T;si+v%*vqd1x#nlEnDGSKZ1MYmII%Fb<He
+z+wbkxYvodYZYWUg&3<+uy+Y*fUxxU0LevyoU;OX-<v$8lr?n8<?)}}ycqrhju^|W;
+z8Qz=$81L<!6QZKXqqX(_{pNVqFITEIy8Zb8KkE0oYA8_1WrfJH{0~fA-FSk>cyH&t
+zn{O6fU;In?Z;k3?l%K6Qt?qmipt!wu-Kkbs{sX4o-?VyXyti}S%~i$M75{x*&%ZYs
+z1L*0#T&Y^`y206iF|TiI8i2IAF#|B(+c(FP!<()Id~7Tu7<2ybNOlY5w(jlS=5!38
+zl$>VgP|D!q;E1VV08(o3X!RmsnE03S#tdLB@h`g-A&QPa?RU_uY>g)Qv~0Or-(SoG
+z2!9~phBW}=y?t|3Ontq&qR4vU|3F{=S#0<%fZMLll>*NeYt7EVY|MY0`|v=T-H-to
+z@9i@9c6A2u#8^hucKojznxpZXt6aWcQ!{_rYRB*B`>ok5K-sA}Z9Pda`9S~^SC3a^
+z03qYwyWwWh<l=wiu)gE;rR+Pp%P)+Q0NLN09|H&>w)OrXmlgn6^nO(>ppfw|<?!vQ
+zmq{l61M1r%>l{hx)%`Jlr8&y=-F9s*3(#^Er*%K@^8mD!b$pHY_8EBc+f`QrJ~fsR
+zwjBTW`>LK-f6wXo*ZywTU01q|f*;_uQ4%2gyM{4<5F%IQ@^4_lV8t#V<Gnp*mn)VM
+zl8ArTDHj{ks|!(+va4?W%IWQVtsTFMFVydkX7}A);~2m(e{LYPbi}-0K6!5u{~uRm
+z0AD81|GO0(`OTd8c~`o1HS?EK*ZH}v(KzDgmEG}kblZAna7LE1zktDt48VAA*Agq1
+z5}p~$h}(_-`(+`@eckid4rRZhf;+F%{?7Oc(5>1u#yhpSm#?V}K>+4mEL{VziT@Rw
+ziIRx_URj7zSIVjog|?LKZPfr2b(g<i9{2R6#w5vicWe5ujO4lc7cl#<ECVp!+qKlv
+z;{?wW=>JvxtH7@dA*!xCbaY@B^#<VHWb<FPvg@w|cv8AuXEZn9{|Eq+;makP0IcHQ
+zTbcnpADZ5EZh*d&U$nPd79!h_va7cI?CL2%b>OG8uU@)aoBVXanJ)CX9miiD5Ms~t
+z2>{6DcljCb?ODnjEJ-91iGP*lJFcDw5Na*2;cxgashr>Qw*qQgrRF3FP-B3i`g@hp
+z+5mt>zc&v6jQ94eu;e(wiv;?AJ<C_^OIHp2bN8g|SN(V|>q)=9J`CW?R`<PWymy?U
+z$aC@^SZ-+EzGD^tM^b+K+BlP7E+b$!{_m(<zTA_tsh0k#2U3m~{>pm5A8Y``j&m?Q
+z{p)re$7TONu+)+HHg99y{#DFHMa{>E?c#r5#ecRd{ei$%OL}@Fpj35PU$>qg_5Vt_
+z`Ri4m6F|^AQ_pQ3|MG+B96%EBzo(mvw)Fg^|BCBh{i$sETYFtSG8oI%DE1A6W?BO<
+z*6mzr_@9P$#9T(euK#cAnS8b7SFikSH>C8M;}w3tu=i1Gyc0;v*L%|>0Kh8eiyQb)
+z?Bm~<0ho^wTE@Q~-Pfd)dpf!+Jt+@HQ-C5{(^LMg-$;yQt4#X=A-!7|x<`qBdA?Xw
+zG>Q0c>2tkhS4!8<^BYpi&UkrW_zi&En`{NtvQBrl{tp1N#a%$B5&C~QT)bL1k@(kD
+zzKbfU_j~=4y7$Z91*m2QRXq?-%Fb*9AWH1}1#YC)%P;0LfKy}L-kS^-ih-HS2-uDP
+z{mH$Y8qqiWzFo})s9k}+tmAL|?Nnz9fo@L@1p-)U{s`}bNbxVv=M#w};=iH$e;xGu
+ze#=o-WBbVzpvcw_^$6hpbT6<_MM75o#sJ2y=5_%^jDI<w0hr4O*!BN@r!O4WlRbU-
+z*KZ3Bbuys4{9N7N^w$d<{#RK6fE%eDa+eQh_5nYP*8j_IX4{c3l8AqG?oaLYQ2{;5
+z`tz#tcW2s+WE*~GKivvgrS}KIdo#0oA2t5v`EP>l$Vr0nUse-<<BdLbc_iJy#{WX=
+zNDl!HNB_(}8UP@itC?LukBoKu!+0BPN0NyD@n+wgI_+~X+Ucv${*AH$E!*-te7BMN
+znGi*NHW)xy7s1v0=<z=@lW<}#BQzbjucpuckK<qH^*nz9Ky2wb|5jkae`mDg=ct|+
+zdB1P~fY5?H_v6U@|IAwAiMfnOwD{L$d`FW3BHxwLbAuE9sv?-0$#7fc@tptw!V31>
+z(c|9>wj+tge^vb=dwMZY6$DZF{-gk?QXUWbr)7Wugmpe$19)Pr+Z|4z9XT<V5wh$5
+z$DMphz5Qg{&yI?AxBht`gJ9ARh~amWxw|;=AE+vvX#D3@zdmUV{2745(R_eUFA)H+
+z=Xr84S-m&k+Y{ELqQHr{jF46TKd$yAvTBCU^LGQPD*$x$uU4@1hp0022O^uC1dbm6
+zo|NA3)o2sIiMfnO#Q4{@esw25TvIE4qiW#3Y>oH_qI)w6+-EWJe|4VdxBlxS691DS
+zz7BYIa_%R;|Iw3y_CORG-1Gy)FrK@6{!P>u@ps~n?iE>5Mqtu~-#{<ptLwjfs`Te%
+z3$PfU{2wO-c{+a}rZayHz<h6y1%EeTvhlBv{mJ&YIT+RU?p5^~Ky|bM5I|H%o}U4{
+zFy7l`!LKTuNc>Mq`{ngjKKCd8dvwUBT@cwyv#&S*0Epx2nM&Pb$G=|=_{4mS&}#gD
+zF#X$pJ}}-7Fj^6iu2Y>}{s|xsodLXz+yDEQf}fbT5l<s}H68E0=?b6T0W9m|Er9-I
+zAX4`Aya0gshAIPiX}q_~${(K|AD^0+5$xiBT<Tl+JAmcxr1YoQ=AaLdtgEMq#J~Lg
+zZ<2}sX?I`Ly9*A+3j*1EP458$keu^}$FJh||5Cm_J~b~RTJ`_;135xZFE8pMK>2d*
+zUjIlQeN6862B7PBzfL0l2TxAT(+F1a-wnjSU()xU$W@(omkM7%@;=Jpvqa)wo;@}<
+zBUbU>3B<o&=hN-<RqWIA1IhEGJTuqrvo&1uGFI`wKZ^f+x$5{ee*7(l0M=t@9=BT?
+zs)9U=s^xHWxOZ!gQ*XAry}s)8iG2V700000000000000000000000000000000000
+z00000000000000000000008{-c$@o?k2d$C0RZq*x4|QTMQ%uoKRNM}`h9_Q8hm)a
+zvCa&?cu|DYR6pxBYMSHJ8_m{Ux9>^y9{|3=v*V5R-0+aB;=f-FHWr0)wdORttA++Z
+z%A7y=gyX-m6>I>MY&KtQw7Z8)E&|F|8yo*G3=b$q{~u7U)w|>YfZX5=;HBa5*u{S(
+z5c9LLg)*rCAm!PnW&rDqe<knS>+>%F(r!~TfcWuWp6&D(<jT#1v_E~Mnzy+bz-z;U
+zu^a#26#qhqQln>h8z4PCY-R><EAcO~mDY4gkS)hZq0P(yZYTbQ5S3k*)c~Z|;K?Q~
+z0)Az9Ac>FvwW8Cf>qmN>J>0+s;P&EQY?b$>NdS;C!%fTp-WVRjdisAMM6pf-fRys&
+z)dpq&ZwzO3))xOFTVqQgQfmX(0NxrN#`@x4i1NPS4S_TmzTUVQfZL9LQEqcQ7%8=R
+z8NfTkld$XmOaAnJX!)jV$T@%%_;9*mBY@kFe^H<TKuQf?pKMkG@ZRts*4zIJvCT37
+zQtFS7H!J=>7@otr<6q>OtOFvQ&NeFph#mh2w)wwO)TIM~)Y-5MAa?!FgPqVbe*uNP
+z)IE4WxlCji&}l-$h&zgZQSR_>15(IKW)0v;LR$&W4UfPo|Bu%H3sIpY08(lADuF4$
+zCl|>S6~D9i7Y=iPNTtiC@f(1rm*<b-zsm9Ph2aTU_5Zy>Ag#BNYtR57l|ICe+^2)#
+z+a$IUTpAw0?Zm$*bq((geEQ;N08a-}zKGw991jd%_ASM~s8AUgsdN#07tphTlu2X&
+zcNza#G61C0`?$+@&#pWv-^G2E<KrvC_kUaczbLT?h*a`k#vHppSAjc>`zpuBL&Mi^
+z7yo&iNxwNY!@C2YIxltxpyOX&#9jl4AOE?zn6|Oq{?wl|Fi+RPjyZOJ;Sb#ZD`p08
+za<}m>s_X(nD#aYTzwiS$=BwO!{BO6Y1%gz%j5T(DIqJ9v@m3N}<M;pDHUs_zB{l&e
+zeU3aid>d!%K92vGdBlVG@t<9YX)A3807#`+=Kv=6_QtCzdiU{P;c{T4(`AecfnH6%
+zvcYd-EG0g?^Zq~A=2}3c($Uw^Gl0OooqvdNv+#f1dHjnSGXO}ZtLXc80`dQCj8XuP
+z?mqr=90Nj1Mb7{N@h`uLz6S8v^u^ol|FfFyGpU<C1CRod*8pbj?LCW}0X#8%$F}jm
+zo!>IWby#JN0V1WYo=2O!`(h^kqt_ITAOCKvy}Q?Lw;Huv#8#lN=Sk)OkV+AE0i8_m
+z?N-z0S5b?BJvDvlR{j5!+jS~o`}`SH0z+!OiB!cW5dT`#4B(mRdyg3ZQp#>U?9T>O
+z*#dyHinazYAOFK>%}Ap0uh;Q=HT(U*+pGW}wa%mL0y_EK-1jwzmH|AUdl@ZkA8x$F
+zr(d@(2+)*Arq2PSK$JS3CvWG!nDa<$059fWMu`>w(rsHe0F(hidPP|SI9a&2J6Z-X
+zIYtl^FaD)$g?)js(yxPW52Q+jI-ZO1F9%VU64w&{?mf#hfqCixBE{ZXZvr@dzxZ`s
+zM#uoB$A|*LcHhSQUvumlfb8;D0zPTcmhVpu_jY>`)&SNN|2@l%0L~}<h=J9tGXPWk
+zM_Eb?9wV5D-~Y>w-5g+zEx<^z;Ty{g;M8<)x4f`kN?cd`%i4HuFBC2VMyd@hm+#H-
+zFW=d2CY(7&FqT07FFRphMB^$zq}!QY*L`Zbw_D09+baRr7XN*#0RRgCNH@#n`z7%&
+zFD#3JO^*=;gzdUl&e}I^?gh#21>PP=9nbCv-|5AYZ^$wOSYQ12N})3Uk=Bx52S^F4
+z4ZKU^-|{%o`r=>Kau!w&C4f(#RR-|ja@iMh`NU=^Vc{5olF0ZUfQ_rC;Ujl>{LA;@
+zU*-7tYtsiL{(;+PkpVmyEd6*^#lRMh5h=GH|6Bn848ID!e7_?8<%LBCU^qsQO#Bnk
+zfTi$9_#XJzf190!zgA>z@o(pd_5zUSVI$XgZ{NhLuu}jhYmEPX-Erzl<6cYI*SbB0
+za=*YLFKh;|I{q)i&Lo}~ju9p^{+F^>5F)E>>xICAR@_laT2-q#j^pf70SxfMmhpSI
+z^1JfFW&rDq|E^690PX++qzs$8ua5uFmx3FQ5hpbN-^p4u0PO!k>ghT2a2dd(RbQ4T
+z!<GX!A0td={m<<*ooaa}TqDq4_4@#+5iWN(-rE`UAyhH22gWi2$;7{E&HlZ+->TQj
+zH?{$s{{eiVuJXAt{^gr5LM#HTG5!M^09=14P+Z;&6e$1-_+EzyT;si+GX`PS0M;1)
+zZD+S1yw=n0?lqlSS)U62+4$JsSeYAu0AHBMHQw7fD@;X^hsH7@NsRw{)vau?*68*E
+z;{fTp{oZc9Rxah|h62^z>}LnkD@5-8Wr%MlL`}i<#s98f{-aQJS_`r5-rsGEhXTGD
+z8-jq5;msL<@!sA!Au5VIT3i3$Z;ogEa;0jc+n*2cqkgZeh606LR){Ri|G>o6jVE}F
+z_jb;^`DW4e#lMvQ)~HTK`Pquo>drR-irZ_~ooa>UKVa(pO{;gtdpqadTvdEs@!!|=
+z{ClG@fS&Hlm8$iw8=MUo^ZLf70Z6MGGXUegeRDiHyy;57$Hp>(G3Wn|WVcXm>)zgN
+zPR9UB$!T^Dr3@|(j+hz-Af*P6RxbjEiGL|?%mCIB|FT;VqUiY3eh1CU)@YJX%a*J4
+z{l!dx@CO2JSOYNL+c!tW)Yq#kimWI85A^k)#fIMkxb5m(De!Eu*6bY2#{9>*4-cf-
+z4H<y(-Y$c0S7!iEjAcY^$N#FKIU2vY%H{htHS?FPcKnXM-<r(=l%1;6){_L29|SOQ
+z^>|eV5HkL~8*Ua&F8)Uj>pM<g%D$t!{K6;+ko~>+F@O+aTkj8YX#s#m?^o3V3K{=W
+z4&SbNnPlQWpuR1#&XJT}-5>K;nxkCbZP(_q04-N>TK5A#4?tU4$JcmopMfX8U3Dek
+zQ)3xn%kh7|uj+aA_neM@?eBKob*0-V_yJxUB>}R(YZwCvA#znN{{|KeR_p>Y-rHk#
+zxne0HiTHP&a<L)3x)3!fyXw}joZimY+VQ*iLjC?|cHiAKjsYC==LS+sN6h=>llK<!
+z|8YeI@MQx1zgy9f-^_`hccoibGk-aCouAtpjU#?u*&RPex2<OeXJk413mB}(0F3u`
+zEwN%L;hC|FxZU`_UlyX=*FAsjQ1&Y-xbr&g?~Jbi-KtGvyi=Qd`I_1g1Yq99(lr2^
+z_+PP^D2e#*m4zsErK}23XiM4NRt-Q=clrC}aZg`rOp<(ex2FHfNS>>I0kaRwG63Vf
+zT}v%JPVhW|{$Itv3jDedqUy>+M+bIMZvgI1HveTSyZ%amC#BnUMsoxHj{q<kzFe{i
+zz$*T|r5V8Uq3K=c2Ix!qMSHttA+ilAyK2kNuATx^2YyQX>ZQB2$xj!Y=|Z2|as1^0
+zA@)q40DxS6m!I+8o~69Ol0+hr_*YrJ<LY?;q1N&m{)YdO%K1HiE1<SjYEF^>H3lfE
+zzgHQp4FFj5d-DLmcyG@NOO6w~NTC1MvwYRQbk)E=cTdWG)sOeGp7iVM!vMZ)b>ExD
+zd&en?JSYEw<%Z_%J67?3B;~iSjWY@6G6Htv|BlM#%RMQZYU!_fAmw=BudE0B!3IF=
+zI0w_yzi!uYT=xG1OC6bS^ETG)U&UNh)O?KCF8=pb{Aat;9|&x<q^Cy$N>!Kjb?f<2
+z|F4vrzh3n@0R+7>_1xC+FF%;h0VEOsd%C%3OV3~WuekozpURfMwb#`ngRxwVV&6b$
+zrZoU#-OiPU|7mDP%w+`Z`v10`$yZx`^~&FNLrSkXUg7r(dmpvNJAt%(y*Et)0IYJp
+zxPkw~KK_jvfcY4qW&G>WeN9Tar=z>llk#9R1t_vLJ>~EEjl@{C%CsL4(z}JBdzAQ>
+z=Zi%}lZgM8KG$1zrF8u~zagdUjF<O?-vG$H$yPuu>vU)9{{S#s+y!(Rq5qe|#jAxA
+ziGN+?yQq?Szt=CRd%yf$fNEw?)dTUQ?94U*qQt&m;6`e_{9-->I5pPoy~$vq7?`<?
+zfZh1tpWMr-5q-n&+tplv+7;-_I{wDrPIaab==S7LAb^$TkMKT-6#w#kK9NWw{u{dg
+z*FnGUw;W|Pwx3J^ifsK*j{xpZ_W}!5BxL1p3}EbPZWmC*_?Pn;fVqr-UH|WQ`oeKN
+z+0%!A{kGsxCj+|6&(-}+f4#urf0Y#gxRKf+clmH;AMnFy{lENXwjKE*iTGFN{?uL{
+z70{!sKd&l(cc#rqw&8d7)2)D2dVe6iH#4jEQR82p|0dXuoFo|kWi<gf-sn@8N74;!
+z{4cbQ^bp{1^w0dG0RY0en%M>P$XK^OjJLsdB#HPRZ}!cp(>@2Ioxb|)-zXc<vMs;E
+zcN@8%2~pH%g8_tf5nR2G9{)2l2`A<<Leqi!YWn>DIR1rR&+{h$#Fn1(Zv`g&cSbvY
+zj_P@l_X`IA2rbxiKaSl0&#Wb$n9GPni+^3lcQhFw@?9xCH#p(1DuSt*47XJt-w6O9
+ztYFU_J^sC5JCbPpSJf}FrxycNK@gSiPYQr4<?*0@S_TL}Sm)C<fG5Vf-Qfh<krQ(n
+zA-n#6+{u^J+fTOr?5JpW>z@ZQ2qyi27=AaIyNeV5fvUoZ#(!S*>yy^Np8+@=%?J4O
+z5&-~vo+k&B)qC^3Jz-5M3Y?hB2wC<2<7!_bt7iB-e>b4I0zg;)Y6VMwh$=&WAhO9x
+z;OO!1N$Cw=jWz+Cn9GPnjDLOWS9kKmHMQb5ss`@M)`))~x;LZ1eHJ7CSLca->%UGS
+z@jn^j>wtGB=YI10A3Ygp4@9BCO+P>k<GH)%-$Z>8e<%LvUXdkb1SVbh4fHa;y8g?j
+zN`Fqa0E_X-|8YW)r}GD5I`h{6%=h+K@OKj?8~^&)pKOntgHdhoURAFFR7V>C0Yr7=
+z`5C|q<Go!L{Hnr<#Q&tUUtVA3bAR%`M~8gc1(B^Z`+D;afH<z6snk7o{QKpAPt3;%
+zt;YWc)4%QK1LOSwqZI+^I@Rgrp8(>}8Nkc9{l9-H_=$NN@id}W)A8P$uJGv{z_LEx
+z0_a}`B4uCC3jm03s4{?;#(TT0{PF4W@u_(k!7l#CrM`u~16b}(N`H!N4*CGex_X*O
+z{LA0}CYku3cK1cSyWn8FAdt=1^d2Ap$vJ;`{3?F`FXijwQ}Z&SRsVlKkR$Z;@}e#R
+zlrPur^^fGy$K-x*0J@I%>m=fT@Z{7yjbIi3-9Y^NC4KLST-9lJsqh6P@1q<(OC<i~
+z*<*7vVio_LK>Yi4KHW}V#XdbhkUUSyGjrWOTf-$UV-^4VqxjF4tBzme$KPTIU_FNB
+zal5slD#){_S`J5td$;B|^=7-<>#JU$*arXr000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+b0000000000000000000000000fO!6Y#Ii6i
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/plane_b.bmp b/amb96/assets/plane_b.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8f9a14ccb2ec931b6bb19fb36d9152477f45df2
+GIT binary patch
+literal 1049654
+zcmeI*O>A4&nJ{1uFpJFQ+5pFpAi*L8f&eQ>feP7U6$B!nFlPp)T)D}liSyq{(@fg<
+zr>d*)pxZ8IIm>Rl>@v&lK6Ke-mfmLRrI-3}?<FZpx{`QFN{0%crx2317Dd0*d(Z!S
+ze){m={`qDl^>6=NsWj7n`RDxWpDJ%;|9ho!v-1CvO7>Oxr%L`+spS9f8<ol%*&oaQ
+z<&8Jqs4U*RS-H7*vr_r)X65G1#meH%#mdda#meI1Vx{ukV&#qR7AuvPi<QOI)ynGX
+zYUPdZRx5A3T&>)Exmx+rkA76S`SM4V#g{*-{P@Q|t}MR%ab@-8k1Id<$xkY)FMm?`
+z(aWDye*E&Ml?M+VRDSyX+m#PK_@MIO`wuF={q1inAH4c)<&S^-W93hO{8Q!kul`i|
+z^Z)%{<$quOx$@^f|E2QhSAVJe<<(y+e|i1a%3r_zw({-kZ!3TM_HUKH{q1j+Z(pZh
+zf3N)g_1`Q1_{Tpge}Dat%0FKJqw?K%-&J0|d|7#U__Ff-_up4uegA#s<>B|0?+?>|
+ze^vSZ)vL;@SFb9sU%je)fB35M>hM+Nb^6cOuPd)#zpfm<eqDKW_`34?@O9<z@O7n9
+zIjp>qe!X#6xq0)jvY37?9#&RY4=X=PzkYOB`EmO7<HO2NesWm(=}!+U57Ms(hn2S<
+z99BN~;IQ)f=ZBTw{`Ro)`#&C5{`jZE%K!f9u=0QZcUbvz`t|3-%AfyoSo!N;4l958
+z>tW@ue?6>xoBs3L!^*ec9#;PT_ruCR{&86O?z_Xv%a@0h@6)gE4=b<IuUChaSFaB%
+zuU{Wl4%2@g9##&0i9yltK&4U%0000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+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
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+z00000000000000000000000000000000000000000000000000000000000000000
+w000000000000000000000000000000000000000000000000000L+j74=LifxBvhE
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets/sonic.bmp b/amb96/assets/sonic.bmp
+new file mode 100644
+index 0000000000000000000000000000000000000000..93643a97947ec39cfebbf03b864860facdcce985
+GIT binary patch
+literal 14390
+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
+H>Yex>3|YgJ
+
+literal 0
+HcmV?d00001
+
+diff --git a/amb96/assets_types.h b/amb96/assets_types.h
+new file mode 100644
+index 0000000..d4d1f78
+--- /dev/null
++++ b/amb96/assets_types.h
+@@ -0,0 +1,45 @@
++#ifndef ASSETS_TYPES_H
++#define ASSETS_TYPES_H
++
++#include <stdint.h>
++
++/* =========================================================================
++   Types des données graphiques, telles que les produit tools/bmp2c.
++
++   Tous les pixels sont des index de palette sur 8 bits (mode Packed Pixel
++   du VDP 32X). L'index 0 est transparent pour les sprites.
++   ========================================================================= */
++
++/* Les tiles sont carrées, de 32 x 32 pixels (comme dans AMB96 d'origine) */
++#define TILE_SHIFT 5
++#define TILE_SIZE (1 << TILE_SHIFT)
++#define TILE_PIXELS (TILE_SIZE * TILE_SIZE)
++
++/* Jeu de tiles partagé par les plans : 'count' tiles de TILE_PIXELS
++   octets, rangées ligne par ligne. Au plus 256 tiles (index sur un octet). */
++typedef struct {
++  uint16_t count;
++  const uint8_t *pixels;
++} Tileset;
++
++/* Plan : grille de widthTiles x heightTiles numéros de tile, ligne par
++   ligne. Les deux dimensions sont des puissances de 2, pour que le
++   défilement boucle avec un simple masque. */
++typedef struct {
++  uint16_t widthTiles;
++  uint16_t heightTiles;
++  const uint8_t *cells;
++} Tilemap;
++
++/* Sprite : width x height pixels, ligne par ligne */
++typedef struct {
++  uint16_t width;
++  uint16_t height;
++  const uint8_t *pixels;
++} Sprite;
++
++/* Palette : 256 couleurs au format du VDP 32X, 0bbbbbgggggrrrrr
++   (le bit 15, priorité, est laissé à 0). */
++#define PALETTE_COLORS 256
++
++#endif
+diff --git a/amb96/framebuffer.c b/amb96/framebuffer.c
+new file mode 100644
+index 0000000..9566221
+--- /dev/null
++++ b/amb96/framebuffer.c
+@@ -0,0 +1,6 @@
++#include "framebuffer.h"
++
++void fb_init_line_table(int screenHeight) {
++  for (int y = 0; y < screenHeight; y++)
++    vdp_dram[y] = (uint16_t)((FB_LINE_TABLE_BYTES + y * FB_WIDTH) / 2);
++}
+diff --git a/amb96/framebuffer.h b/amb96/framebuffer.h
+new file mode 100644
+index 0000000..1d64f6f
+--- /dev/null
++++ b/amb96/framebuffer.h
+@@ -0,0 +1,42 @@
++#ifndef FRAMEBUFFER_H
++#define FRAMEBUFFER_H
++
++#include <stdint.h>
++
++#include "vdp.h"
++
++/* =========================================================================
++   Frame buffer du VDP 32X en mode Packed Pixel (un octet par pixel).
++
++   La DRAM commence par la table de lignes : un mot par ligne affichée,
++   qui donne l'adresse (en mots) des pixels de la ligne. On réserve
++   256 mots (512 octets), comme AMB96 d'origine, puis les lignes se
++   suivent, de FB_WIDTH octets chacune.
++   ========================================================================= */
++
++#define FB_WIDTH VDP_SCREEN_WIDTH
++#define FB_LINE_TABLE_BYTES 512
++
++/* Remplit la table de lignes du frame buffer de dessin */
++void fb_init_line_table(int screenHeight);
++
++/* Premier pixel de la ligne 0 du frame buffer de dessin.
++   vdp_dram change à chaque échange de frame buffer : appeler cette
++   fonction au début de chaque image, une fois l'échange effectué. */
++static inline uint8_t *fb_pixels(void) {
++  return (uint8_t *)vdp_dram + FB_LINE_TABLE_BYTES;
++}
++
++/* Ce qu'un CPU dessine pendant une image : les lignes firstLine,
++   firstLine + lineStep, firstLine + 2 * lineStep...
++   Avec deux CPU : lineStep = 2, firstLine = 0 (Master) ou 1 (Slave).
++   Chaque CPU possède entièrement ses lignes (fond puis sprites) : aucun
++   des deux n'a besoin d'attendre l'autre au milieu de l'image. */
++typedef struct {
++  uint8_t *pixels; /* ligne 0 */
++  int height;
++  int firstLine;
++  int lineStep;
++} Screen;
++
++#endif
+diff --git a/amb96/md68k.c b/amb96/md68k.c
+new file mode 100644
+index 0000000..a7b328d
+--- /dev/null
++++ b/amb96/md68k.c
+@@ -0,0 +1,18 @@
++/* =========================================================================
++   Programme 68000 (Mega Drive).
++
++   Il ne fait plus qu'une chose : à chaque VBlank, lire la manette et la
++   transmettre aux SH2 par un registre COMM. Toute la logique du jeu est
++   sur le Master SH2.
++   (Dans AMB96.asm, le 68000 calculait aussi les défilements.)
++
++   Sur la console, ce serait du code 68000 : lecture du port $A10003
++   (TH haut puis TH bas), puis écriture en $A15120 + 2 * COMM_PAD.
++   ========================================================================= */
++
++#include "game.h"
++#include "interface.h"
++#include "platform.h"
++#include "shared.h"
++
++void md_vint(void) { comm[COMM_PAD] = (uint16_t)platform_read_pad(); }
+diff --git a/amb96/plane.c b/amb96/plane.c
+new file mode 100644
+index 0000000..f96c1ef
+--- /dev/null
++++ b/amb96/plane.c
+@@ -0,0 +1,43 @@
++#include "plane.h"
++#include "framebuffer.h"
++
++#include <string.h>
++
++/* La ligne est construite morceau par morceau : la fin de la première
++   tile (à partir de la colonne scrollX), les tiles entières, puis le
++   début de la dernière. Les dimensions du plan étant des puissances de 2,
++   le bouclage n'est qu'un masque.
++
++   Sur SH2, memcpy est la première chose à optimiser (copies par mots
++   longs quand source et destination sont alignées, comme les routines
++   drawTileLine* de la version assembleur). */
++void plane_draw_line(uint8_t *dst, const Tilemap *map, const Tileset *tiles,
++                     int scrollX, int worldY) {
++  const int widthMask = (map->widthTiles << TILE_SHIFT) - 1;
++  const int heightMask = (map->heightTiles << TILE_SHIFT) - 1;
++
++  worldY &= heightMask;
++
++  /* Rangée de tiles traversée par la ligne, et ligne dans chaque tile */
++  const uint8_t *row = map->cells + (worldY >> TILE_SHIFT) * map->widthTiles;
++  const uint8_t *tileLine =
++      tiles->pixels + (worldY & (TILE_SIZE - 1)) * TILE_SIZE;
++
++  int x = scrollX & widthMask;
++  int remaining = FB_WIDTH;
++
++  while (remaining > 0) {
++    int xInTile = x & (TILE_SIZE - 1);
++    int count = TILE_SIZE - xInTile;
++    if (count > remaining)
++      count = remaining;
++
++    const uint8_t *src =
++        tileLine + row[x >> TILE_SHIFT] * TILE_PIXELS + xInTile;
++    memcpy(dst, src, (size_t)count);
++
++    dst += count;
++    remaining -= count;
++    x = (x + count) & widthMask;
++  }
++}
+diff --git a/amb96/plane.h b/amb96/plane.h
+new file mode 100644
+index 0000000..3032f4e
+--- /dev/null
++++ b/amb96/plane.h
+@@ -0,0 +1,22 @@
++#ifndef PLANE_H
++#define PLANE_H
++
++#include <stdint.h>
++
++#include "assets_types.h"
++
++/* =========================================================================
++   Plans de tiles.
++
++   Un plan est une image de (widthTiles x 32) x (heightTiles x 32) pixels,
++   qui boucle dans les deux directions. Le pixel (0, 0) de l'écran montre
++   le pixel (scrollX, scrollY) du plan.
++   ========================================================================= */
++
++/* Dessine FB_WIDTH pixels : la ligne worldY du plan, à partir de la
++   colonne scrollX. worldY et scrollX peuvent être quelconques (négatifs,
++   ou plus grands que le plan) : ils sont ramenés dans le plan. */
++void plane_draw_line(uint8_t *dst, const Tilemap *map, const Tileset *tiles,
++                     int scrollX, int worldY);
++
++#endif
+diff --git a/amb96/shared.h b/amb96/shared.h
+new file mode 100644
+index 0000000..1e49d73
+--- /dev/null
++++ b/amb96/shared.h
+@@ -0,0 +1,53 @@
++#ifndef SHARED_H
++#define SHARED_H
++
++#include <stdint.h>
++
++/* =========================================================================
++   Ce que se partagent les trois processeurs.
++
++   1. Registres COMM (interface.h) : 8 mots visibles du 68000 et des deux
++      SH2, sans cache. Ils servent de boîtes aux lettres et de signaux.
++   2. La scène de l'image en cours (Scene) : écrite par le Master, lue par
++      le Slave, en mémoire partagée (SDRAM).
++   ========================================================================= */
++
++/* ---- Registres COMM ----------------------------------------------------- */
++
++#define COMM_PAD 0        /* 68000 -> SH2 : boutons de la manette (PAD_*) */
++#define COMM_FRAME 1      /* Master -> Slave : image à dessiner (1, 2, ...) */
++#define COMM_SLAVE_DONE 2 /* Slave -> Master : dernière image terminée */
++/* COMM 3 à 7 : libres */
++
++/* ---- Scène ---------------------------------------------------------------
++   Tout ce qu'il faut pour dessiner une image. Le Master la calcule au début
++   de l'image, la publie, puis les deux CPU dessinent la même. */
++
++typedef struct {
++  int16_t splitLine;         /* première ligne du plan B */
++  int16_t scrollAX, scrollAY; /* défilement du plan A (haut) */
++  int16_t scrollBX, scrollBY; /* défilement du plan B (bas) */
++  int16_t sonicX, sonicY;    /* position du sprite, en pixels d'écran */
++} Scene;
++
++/* ---- Mémoire partagée entre les SH2 --------------------------------------
++   Chaque SH2 a son propre cache : sans précaution, le Slave peut lire une
++   copie périmée de ce que le Master vient d'écrire.
++   - Sur 32X : on accède à la donnée par son adresse « cache-through »
++     (adresse | 2000 0000h), qui contourne le cache.
++   - Sur le simulateur : les threads de l'hôte n'ont pas ce problème de
++     cache, mais le processeur (Apple Silicon) peut réordonner les
++     écritures : il faut une barrière mémoire.
++   SHARED(p) donne le pointeur à utiliser ; SHARED_BARRIER() sépare
++   l'écriture des données de celle du signal COMM qui les annonce (et,
++   côté lecteur, la lecture du signal de celle des données). */
++
++#if defined(__sh__)
++#define SHARED(p) ((__typeof__(p))((uintptr_t)(p) | 0x20000000u))
++#define SHARED_BARRIER() __asm__ volatile("" ::: "memory")
++#else
++#define SHARED(p) (p)
++#define SHARED_BARRIER() __sync_synchronize()
++#endif
++
++#endif
+diff --git a/amb96/sprite.c b/amb96/sprite.c
+new file mode 100644
+index 0000000..89e69ef
+--- /dev/null
++++ b/amb96/sprite.c
+@@ -0,0 +1,38 @@
++#include "sprite.h"
++
++void sprite_draw(const Screen *screen, const Sprite *sprite, int x, int y) {
++  /* Partie visible du sprite, en coordonnées du sprite */
++  int colMin = x < 0 ? -x : 0;
++  int colMax = sprite->width;
++  if (x + colMax > FB_WIDTH)
++    colMax = FB_WIDTH - x;
++
++  int rowMin = y < 0 ? -y : 0;
++  int rowMax = sprite->height;
++  if (y + rowMax > screen->height)
++    rowMax = screen->height - y;
++
++  if (colMin >= colMax || rowMin >= rowMax)
++    return;
++
++  /* Première ligne visible qui revient à ce CPU */
++  int row = rowMin;
++  int phase = (y + row - screen->firstLine) % screen->lineStep;
++  if (phase < 0)
++    phase += screen->lineStep;
++  if (phase != 0)
++    row += screen->lineStep - phase;
++
++  const int width = colMax - colMin;
++
++  for (; row < rowMax; row += screen->lineStep) {
++    const uint8_t *src = sprite->pixels + row * sprite->width + colMin;
++    uint8_t *dst = screen->pixels + (y + row) * FB_WIDTH + x + colMin;
++
++    for (int i = 0; i < width; i++) {
++      uint8_t c = src[i];
++      if (c != 0)
++        dst[i] = c;
++    }
++  }
++}
+diff --git a/amb96/sprite.h b/amb96/sprite.h
+new file mode 100644
+index 0000000..265eac9
+--- /dev/null
++++ b/amb96/sprite.h
+@@ -0,0 +1,16 @@
++#ifndef SPRITE_H
++#define SPRITE_H
++
++#include "assets_types.h"
++#include "framebuffer.h"
++
++/* Dessine les lignes du sprite qui reviennent à ce CPU (voir Screen).
++   (x, y) : coin haut-gauche, en pixels d'écran ; le sprite peut déborder,
++   ou être entièrement hors de l'écran. L'index 0 est transparent.
++
++   Sur 32X, la transparence peut être faite par le matériel : écrit dans
++   la zone « overwrite » du frame buffer (DRAM + 20000h), un octet nul est
++   ignoré. Le simulateur ne l'émule pas encore : le test est fait ici. */
++void sprite_draw(const Screen *screen, const Sprite *sprite, int x, int y);
++
++#endif
+diff --git a/game.c b/game.c
+index 322f9f5..2342aae 100644
+--- a/game.c
++++ b/game.c
+@@ -35,6 +35,9 @@ void slave_vint(void) {
+   slaveVInts++;
+ }
+ 
++/* Cette démo n'a pas de programme 68000 */
++void md_vint(void) {}
++
+ /* ---- Master ------------------------------------------------------------ */
+ 
+ void master_main(void) {
+diff --git a/game.h b/game.h
+index ca1222a..276c0e1 100644
+--- a/game.h
++++ b/game.h
+@@ -16,4 +16,11 @@ void slave_main(void);
+ void master_vint(void);
+ void slave_vint(void);
+ 
++/* Routine V_INT du 68000 (le programme Mega Drive de la cartouche).
++   Le 68000 n'est pas émulé : la plate-forme appelle cette fonction au
++   début de chaque VBlank, depuis la synchro vidéo. Elle doit être très
++   courte (lire la manette, écrire les registres COMM) et ne toucher ni
++   au frame buffer ni à la palette 32X, réservés aux SH2. */
++void md_vint(void);
++
+ #endif
+diff --git a/platform.h b/platform.h
+index 87a4632..8397513 100644
+--- a/platform.h
++++ b/platform.h
+@@ -18,6 +18,24 @@ int platform_running(void);
+ /* Outil de mesure : temps écoulé depuis le début du dernier VBlank */
+ double platform_vblank_elapsed_ms(void);
+ 
++/* ---- Pour le programme 68000 ------------------------------------------- */
++
++/* Manette Mega Drive 3 boutons, port 1 : un bit par bouton, 1 = appuyé.
++   Même ordre que l'octet SACBRLDU qu'obtient le 68000 après ses deux
++   lectures du port ($A10003, TH haut puis TH bas) et l'inversion.
++   Seul le programme 68000 (md_vint) a le droit de l'appeler : sur la
++   console, les SH2 n'ont pas accès aux ports manette. */
++#define PAD_UP 0x01
++#define PAD_DOWN 0x02
++#define PAD_LEFT 0x04
++#define PAD_RIGHT 0x08
++#define PAD_B 0x10
++#define PAD_C 0x20
++#define PAD_A 0x40
++#define PAD_START 0x80
++
++unsigned platform_read_pad(void);
++
+ /* ---- Pour les modules 32X ---------------------------------------------- */
+ 
+ /* Les deux SH2 sont identiques : c'est le câblage de leur broche MD5 qui
+diff --git a/platform_headless.c b/platform_headless.c
+new file mode 100644
+index 0000000..e9cbcc4
+--- /dev/null
++++ b/platform_headless.c
+@@ -0,0 +1,273 @@
++#include "game.h"
++#include "interface.h"
++#include "platform.h"
++#include "vdp.h"
++
++#include <pthread.h>
++#include <signal.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++/* =========================================================================
++   Plate-forme sans fenêtre, pour les tests et les captures.
++
++   Mêmes règles que platform_minifb.c (threads Master et Slave, balayage de
++   262 lignes à 60 Hz en temps réel, V_INT par signal), mais l'image n'est
++   pas affichée : certaines images sont enregistrées en PPM, et la manette
++   suit un scénario donné en ligne de commande.
++
++   Usage :
++     amb96_headless [--frames N] [--shot IMAGE:fichier.ppm]...
++                    [--pad DEBUT-FIN:BOUTONS]...
++   Boutons : U D L R (croix), A B C, S (Start). Exemple :
++     amb96_headless --frames 120 --pad 10-60:RA --shot 119:fin.ppm
++   ========================================================================= */
++
++#define SCREEN_HEIGHT 224
++#define VBLANK_LINES 38
++#define FRAME_RATE 60
++#define MAX_SHOTS 16
++#define MAX_PAD_STEPS 32
++
++static volatile int _running = 1;
++static __thread int _cpuId = -1;
++
++static int _totalLines = SCREEN_HEIGHT + VBLANK_LINES;
++static long _frameLimit = 300;
++static volatile long _frame = 0; /* image en cours de balayage */
++static volatile int64_t _vblankStartNs = 0;
++
++static uint32_t *_rgb = NULL;
++
++static struct {
++  long frame;
++  const char *path;
++} _shots[MAX_SHOTS];
++static int _shotCount = 0;
++
++static struct {
++  long first, last;
++  unsigned buttons;
++} _pad[MAX_PAD_STEPS];
++static int _padCount = 0;
++
++static pthread_t _cpuThread[PLATFORM_CPU_COUNT];
++static volatile int _cpuReady[PLATFORM_CPU_COUNT];
++
++#define INTERRUPT_SIGNAL SIGUSR1
++
++/* ==== Fonctions de platform.h ============================================ */
++
++static int64_t nowNs(void) {
++  struct timespec t;
++  clock_gettime(CLOCK_MONOTONIC, &t);
++  return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
++}
++
++int platform_running(void) { return _running; }
++int platform_cpu_id(void) { return _cpuId; }
++void platform_sync(void) { __sync_synchronize(); }
++
++double platform_vblank_elapsed_ms(void) {
++  return (nowNs() - _vblankStartNs) / 1000000.0;
++}
++
++unsigned platform_read_pad(void) {
++  unsigned pad = 0;
++  for (int i = 0; i < _padCount; i++)
++    if (_frame >= _pad[i].first && _frame <= _pad[i].last)
++      pad |= _pad[i].buttons;
++  return pad;
++}
++
++void platform_raise_interrupt(int cpu) {
++  if (cpu < 0 || cpu >= PLATFORM_CPU_COUNT || !_cpuReady[cpu])
++    return;
++  pthread_kill(_cpuThread[cpu], INTERRUPT_SIGNAL);
++}
++
++static void interruptHandler(int sig) {
++  (void)sig;
++  int cpu = _cpuId;
++  if (cpu < 0)
++    return;
++
++  while (_running && interface_vint_active(cpu)) {
++    if (cpu == PLATFORM_CPU_MASTER)
++      master_vint();
++    else
++      slave_vint();
++    interface_count_handled(cpu, !interface_vint_active(cpu));
++  }
++}
++
++/* ==== CPU ================================================================ */
++
++static void *cpuThread(void *arg) {
++  int cpu = (int)(intptr_t)arg;
++  _cpuId = cpu;
++  _cpuThread[cpu] = pthread_self();
++  _cpuReady[cpu] = 1;
++  if (cpu == PLATFORM_CPU_MASTER)
++    master_main();
++  else
++    slave_main();
++  _cpuReady[cpu] = 0;
++  return NULL;
++}
++
++/* ==== Captures =========================================================== */
++
++static void savePPM(const char *path) {
++  FILE *f = fopen(path, "wb");
++  if (f == NULL) {
++    perror(path);
++    return;
++  }
++  fprintf(f, "P6\n%d %d\n255\n", VDP_SCREEN_WIDTH, SCREEN_HEIGHT);
++  for (int i = 0; i < VDP_SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
++    uint8_t rgb[3] = {(uint8_t)(_rgb[i] >> 16), (uint8_t)(_rgb[i] >> 8),
++                      (uint8_t)_rgb[i]};
++    fwrite(rgb, 1, 3, f);
++  }
++  fclose(f);
++  fprintf(stderr, "image %ld -> %s\n", _frame, path);
++}
++
++/* ==== Balayage ===========================================================
++   Une ligne toutes les 63,6 µs, en temps réel : les CPU voient le même
++   rythme que dans la fenêtre. On dort jusqu'à chaque ligne. */
++
++static void sleepUntil(int64_t t) {
++  int64_t d = t - nowNs();
++  if (d <= 0)
++    return;
++  struct timespec ts = {(time_t)(d / 1000000000LL), (long)(d % 1000000000LL)};
++  nanosleep(&ts, NULL);
++}
++
++static void runVideo(void) {
++  const int64_t origin = nowNs();
++  const int64_t linesPerSecond = (int64_t)_totalLines * FRAME_RATE;
++
++  for (long frame = 0; frame < _frameLimit; frame++) {
++    _frame = frame;
++    for (int line = 0; line < _totalLines; line++) {
++      int64_t lineNo = frame * _totalLines + line;
++      int64_t start = origin + lineNo * 1000000000LL / linesPerSecond;
++      sleepUntil(start);
++
++      if (line == 0)
++        vdp_end_vblank();
++
++      if (line < SCREEN_HEIGHT) {
++        vdp_render_line(line, _rgb + (size_t)line * VDP_SCREEN_WIDTH);
++      } else if (line == SCREEN_HEIGHT) {
++        /* L'image 'frame' est complète : capture éventuelle */
++        for (int i = 0; i < _shotCount; i++)
++          if (_shots[i].frame == frame)
++            savePPM(_shots[i].path);
++
++        _vblankStartNs = start;
++        vdp_begin_vblank();
++        interface_raise_vint();
++        md_vint();
++      }
++    }
++  }
++}
++
++/* ==== Ligne de commande ================================================== */
++
++static unsigned parseButtons(const char *s) {
++  unsigned b = 0;
++  for (; *s; s++) {
++    switch (*s) {
++    case 'U': b |= PAD_UP; break;
++    case 'D': b |= PAD_DOWN; break;
++    case 'L': b |= PAD_LEFT; break;
++    case 'R': b |= PAD_RIGHT; break;
++    case 'A': b |= PAD_A; break;
++    case 'B': b |= PAD_B; break;
++    case 'C': b |= PAD_C; break;
++    case 'S': b |= PAD_START; break;
++    default:
++      fprintf(stderr, "bouton inconnu : %c\n", *s);
++      exit(1);
++    }
++  }
++  return b;
++}
++
++static void usage(void) {
++  fprintf(stderr, "usage : amb96_headless [--frames N] "
++                  "[--shot IMAGE:fichier.ppm]... [--pad DEBUT-FIN:BOUTONS]...\n");
++  exit(1);
++}
++
++static void parseArgs(int argc, char *argv[]) {
++  for (int i = 1; i < argc; i++) {
++    if (i + 1 >= argc)
++      usage();
++    const char *opt = argv[i];
++    char *val = argv[++i];
++
++    if (strcmp(opt, "--frames") == 0) {
++      _frameLimit = atol(val);
++    } else if (strcmp(opt, "--shot") == 0 && _shotCount < MAX_SHOTS) {
++      char *colon = strchr(val, ':');
++      if (colon == NULL)
++        usage();
++      *colon = '\0';
++      _shots[_shotCount].frame = atol(val);
++      _shots[_shotCount].path = colon + 1;
++      _shotCount++;
++    } else if (strcmp(opt, "--pad") == 0 && _padCount < MAX_PAD_STEPS) {
++      long first, last;
++      char buttons[16];
++      if (sscanf(val, "%ld-%ld:%15s", &first, &last, buttons) != 3)
++        usage();
++      _pad[_padCount].first = first;
++      _pad[_padCount].last = last;
++      _pad[_padCount].buttons = parseButtons(buttons);
++      _padCount++;
++    } else {
++      usage();
++    }
++  }
++}
++
++int main(int argc, char *argv[]) {
++  parseArgs(argc, argv);
++
++  _rgb = calloc((size_t)VDP_SCREEN_WIDTH * SCREEN_HEIGHT, sizeof(uint32_t));
++  if (_rgb == NULL)
++    return 1;
++
++  vdp_init(SCREEN_HEIGHT);
++
++  struct sigaction sa;
++  memset(&sa, 0, sizeof sa);
++  sa.sa_handler = interruptHandler;
++  sigemptyset(&sa.sa_mask);
++  sa.sa_flags = SA_RESTART;
++  if (sigaction(INTERRUPT_SIGNAL, &sa, NULL) != 0)
++    return 1;
++
++  pthread_t threads[PLATFORM_CPU_COUNT];
++  for (int cpu = 0; cpu < PLATFORM_CPU_COUNT; cpu++)
++    if (pthread_create(&threads[cpu], NULL, cpuThread, (void *)(intptr_t)cpu))
++      return 1;
++
++  runVideo();
++
++  _running = 0;
++  for (int cpu = 0; cpu < PLATFORM_CPU_COUNT; cpu++)
++    pthread_join(threads[cpu], NULL);
++
++  free(_rgb);
++  return 0;
++}
+diff --git a/platform_minifb.c b/platform_minifb.c
+index bd06ea7..7fb5730 100644
+--- a/platform_minifb.c
++++ b/platform_minifb.c
+@@ -218,6 +218,43 @@ int main(int argc, char *argv[]) {
+ 
+ int platform_running(void) { return _running; }
+ 
++/* ==== Manette =============================================================
++   Clavier -> manette Mega Drive. MiniFB repère les touches par leur
++   position physique (disposition US) : J, K, L tombent au même endroit
++   en AZERTY et en QWERTY.
++     Flèches = croix, J = A, K = B, L = C, Entrée = Start.
++   Lu depuis la synchro vidéo ; le tampon de MiniFB est écrit par le
++   thread principal : une touche peut arriver avec une image de retard. */
++
++unsigned platform_read_pad(void) {
++  struct mfb_window *window = _window;
++  if (window == NULL)
++    return 0;
++
++  const uint8_t *keys = mfb_get_key_buffer(window);
++  if (keys == NULL)
++    return 0;
++
++  unsigned pad = 0;
++  if (keys[MFB_KB_KEY_UP])
++    pad |= PAD_UP;
++  if (keys[MFB_KB_KEY_DOWN])
++    pad |= PAD_DOWN;
++  if (keys[MFB_KB_KEY_LEFT])
++    pad |= PAD_LEFT;
++  if (keys[MFB_KB_KEY_RIGHT])
++    pad |= PAD_RIGHT;
++  if (keys[MFB_KB_KEY_J])
++    pad |= PAD_A;
++  if (keys[MFB_KB_KEY_K])
++    pad |= PAD_B;
++  if (keys[MFB_KB_KEY_L])
++    pad |= PAD_C;
++  if (keys[MFB_KB_KEY_ENTER])
++    pad |= PAD_START;
++  return pad;
++}
++
+ int platform_cpu_id(void) { return _cpuId; }
+ 
+ /* Apple Silicon réordonne les écritures entre cœurs : barrière complète */
+@@ -397,6 +434,7 @@ static void beginLine(int line, int64_t startNs) {
+     _vblankStartNs = startNs;
+     vdp_begin_vblank();
+     interface_raise_vint(); /* le VDP signale le VBlank à l'IC4 */
++    md_vint();              /* VBlank Mega Drive : le 68000 */
+     publishFrame();
+   }
+ }
+diff --git a/tools/bmp2c.c b/tools/bmp2c.c
+new file mode 100644
+index 0000000..b3e6560
+--- /dev/null
++++ b/tools/bmp2c.c
+@@ -0,0 +1,380 @@
++/* =========================================================================
++   bmp2c : convertit des images BMP 8 bits indexées en données C pour le
++   moteur AMB96 (voir amb96/assets_types.h).
++
++   Usage : bmp2c MANIFESTE SORTIE
++     Produit SORTIE.h et SORTIE.c.
++
++   Le manifeste est un fichier texte, une ligne par image :
++       # commentaire
++       plane   plane_a    plane_a.bmp
++       sprite  sonic      sonic.bmp
++   Les chemins sont relatifs au manifeste. Chaque ligne produit une
++   variable 'asset_<nom>' (Tilemap pour un plan, Sprite pour un sprite).
++
++   - Plan : l'image entière du niveau. Elle est découpée en tiles de
++     32 x 32 ; les tiles identiques ne sont gardées qu'une fois, et tous
++     les plans partagent le même jeu de tiles (asset_tiles, 256 au plus).
++     Ses dimensions en tiles doivent être des puissances de 2.
++   - Sprite : l'image telle quelle ; l'index 0 est transparent.
++   - Palette (asset_palette) : celle de la première image, convertie au
++     format 32X. Toutes les images doivent donner la même couleur aux
++     index qu'elles utilisent.
++
++   Formats acceptés : BMP Windows non compressé, 8 bits par pixel, de haut
++   en bas ou de bas en haut. C'est ce qu'enregistrent GIMP (mode indexé),
++   Aseprite, Photoshop ou Pillow en mode "P".
++   ========================================================================= */
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define TILE_SIZE 32
++#define TILE_PIXELS (TILE_SIZE * TILE_SIZE)
++#define MAX_TILES 256
++#define MAX_ASSETS 64
++#define MAX_PATH 1024
++
++typedef struct {
++  int width, height;
++  uint8_t *pixels;     /* width * height, de haut en bas */
++  uint8_t rgb[256][3]; /* palette du fichier */
++  int colors;          /* entrées présentes dans le fichier */
++} Image;
++
++typedef enum { KIND_PLANE, KIND_SPRITE } Kind;
++
++typedef struct {
++  Kind kind;
++  char name[64];
++  char path[2 * MAX_PATH];
++  Image image;
++  uint8_t *cells; /* plans : numéros de tile */
++} Asset;
++
++static Asset assets[MAX_ASSETS];
++static int assetCount = 0;
++
++static uint8_t tiles[MAX_TILES][TILE_PIXELS];
++static int tileCount = 0;
++
++static void fail(const char *fmt, const char *arg) {
++  fprintf(stderr, "bmp2c : ");
++  fprintf(stderr, fmt, arg);
++  fprintf(stderr, "\n");
++  exit(1);
++}
++
++/* ---- Lecture BMP --------------------------------------------------------- */
++
++static uint32_t le32(const uint8_t *p) {
++  return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++static uint16_t le16(const uint8_t *p) { return p[0] | (p[1] << 8); }
++
++static void loadBMP(const char *path, Image *img) {
++  FILE *f = fopen(path, "rb");
++  if (f == NULL)
++    fail("impossible d'ouvrir %s", path);
++
++  fseek(f, 0, SEEK_END);
++  long size = ftell(f);
++  fseek(f, 0, SEEK_SET);
++  uint8_t *data = malloc((size_t)size);
++  if (data == NULL || fread(data, 1, (size_t)size, f) != (size_t)size)
++    fail("lecture impossible : %s", path);
++  fclose(f);
++
++  if (size < 54 || data[0] != 'B' || data[1] != 'M')
++    fail("%s n'est pas un fichier BMP", path);
++
++  uint32_t pixelOffset = le32(data + 10);
++  uint32_t infoSize = le32(data + 14);
++  int32_t width = (int32_t)le32(data + 18);
++  int32_t height = (int32_t)le32(data + 22);
++  uint16_t bpp = le16(data + 28);
++  uint32_t compression = le32(data + 30);
++  uint32_t colorsUsed = le32(data + 46);
++
++  if (infoSize < 40)
++    fail("%s : en-tête BMP trop ancien (OS/2)", path);
++  if (bpp != 8)
++    fail("%s : il faut une image 8 bits indexée (256 couleurs)", path);
++  if (compression != 0)
++    fail("%s : la compression RLE n'est pas prise en charge", path);
++
++  int topDown = height < 0;
++  if (topDown)
++    height = -height;
++  if (width <= 0 || height <= 0)
++    fail("%s : dimensions invalides", path);
++
++  img->width = width;
++  img->height = height;
++  img->colors = colorsUsed ? (int)colorsUsed : 256;
++  if (img->colors > 256)
++    fail("%s : palette de plus de 256 couleurs", path);
++
++  memset(img->rgb, 0, sizeof img->rgb);
++  const uint8_t *pal = data + 14 + infoSize;
++  if (pal + img->colors * 4 > data + size)
++    fail("%s : palette tronquée", path);
++  for (int i = 0; i < img->colors; i++) {
++    img->rgb[i][0] = pal[i * 4 + 2]; /* BMP : B, G, R, réservé */
++    img->rgb[i][1] = pal[i * 4 + 1];
++    img->rgb[i][2] = pal[i * 4 + 0];
++  }
++
++  /* Chaque ligne est complétée à un multiple de 4 octets */
++  size_t stride = ((size_t)width + 3) & ~(size_t)3;
++  if (pixelOffset + stride * (size_t)height > (size_t)size)
++    fail("%s : pixels tronqués", path);
++
++  img->pixels = malloc((size_t)width * height);
++  if (img->pixels == NULL)
++    fail("mémoire insuffisante pour %s", path);
++  for (int y = 0; y < height; y++) {
++    int srcY = topDown ? y : height - 1 - y;
++    memcpy(img->pixels + (size_t)y * width,
++           data + pixelOffset + (size_t)srcY * stride, (size_t)width);
++  }
++  free(data);
++}
++
++/* ---- Manifeste ----------------------------------------------------------- */
++
++static void readManifest(const char *path) {
++  FILE *f = fopen(path, "r");
++  if (f == NULL)
++    fail("impossible d'ouvrir le manifeste %s", path);
++
++  /* Dossier du manifeste, pour les chemins relatifs */
++  char dir[MAX_PATH];
++  snprintf(dir, sizeof dir, "%s", path);
++  char *slash = strrchr(dir, '/');
++  if (slash != NULL)
++    slash[1] = '\0';
++  else
++    dir[0] = '\0';
++
++  char line[MAX_PATH];
++  int lineNo = 0;
++  while (fgets(line, sizeof line, f) != NULL) {
++    lineNo++;
++    char kind[16], name[64], file[MAX_PATH];
++    char *hash = strchr(line, '#');
++    if (hash != NULL)
++      *hash = '\0';
++    int n = sscanf(line, "%15s %63s %1023s", kind, name, file);
++    if (n <= 0)
++      continue;
++    if (n != 3) {
++      fprintf(stderr, "bmp2c : %s, ligne %d : 'type nom fichier' attendu\n",
++              path, lineNo);
++      exit(1);
++    }
++    if (assetCount == MAX_ASSETS)
++      fail("trop d'images dans %s", path);
++
++    Asset *a = &assets[assetCount++];
++    if (strcmp(kind, "plane") == 0)
++      a->kind = KIND_PLANE;
++    else if (strcmp(kind, "sprite") == 0)
++      a->kind = KIND_SPRITE;
++    else
++      fail("type inconnu '%s' (plane ou sprite)", kind);
++    snprintf(a->name, sizeof a->name, "%s", name);
++    if (snprintf(a->path, sizeof a->path, "%s%s", dir, file) >=
++        (int)sizeof a->path)
++      fail("chemin trop long : %s", file);
++  }
++  fclose(f);
++
++  if (assetCount == 0)
++    fail("%s ne déclare aucune image", path);
++}
++
++/* ---- Conversion ---------------------------------------------------------- */
++
++/* Vérifie que l'image donne aux index qu'elle utilise les mêmes couleurs
++   que la palette de référence. */
++static void checkPalette(const Asset *a, const Image *ref) {
++  uint8_t used[256] = {0};
++  size_t n = (size_t)a->image.width * a->image.height;
++  for (size_t i = 0; i < n; i++)
++    used[a->image.pixels[i]] = 1;
++
++  for (int c = 0; c < 256; c++) {
++    if (!used[c])
++      continue;
++    if (memcmp(a->image.rgb[c], ref->rgb[c], 3) != 0) {
++      fprintf(stderr,
++              "bmp2c : %s : l'index %d vaut #%02X%02X%02X, mais "
++              "#%02X%02X%02X dans la palette de référence (%s)\n",
++              a->path, c, a->image.rgb[c][0], a->image.rgb[c][1],
++              a->image.rgb[c][2], ref->rgb[c][0], ref->rgb[c][1],
++              ref->rgb[c][2], assets[0].path);
++      exit(1);
++    }
++  }
++}
++
++static int isPowerOf2(int v) { return v > 0 && (v & (v - 1)) == 0; }
++
++static int findOrAddTile(const uint8_t *tile, const char *path) {
++  for (int i = 0; i < tileCount; i++)
++    if (memcmp(tiles[i], tile, TILE_PIXELS) == 0)
++      return i;
++  if (tileCount == MAX_TILES)
++    fail("plus de 256 tiles différentes (dernier plan : %s)", path);
++  memcpy(tiles[tileCount], tile, TILE_PIXELS);
++  return tileCount++;
++}
++
++static void cutPlane(Asset *a) {
++  const Image *img = &a->image;
++  if (img->width % TILE_SIZE || img->height % TILE_SIZE)
++    fail("%s : largeur et hauteur doivent être des multiples de 32", a->path);
++
++  int w = img->width / TILE_SIZE;
++  int h = img->height / TILE_SIZE;
++  if (!isPowerOf2(w) || !isPowerOf2(h))
++    fail("%s : le nombre de tiles en largeur et en hauteur doit être une "
++         "puissance de 2 (8, 16, 32, 64...)",
++         a->path);
++
++  a->cells = malloc((size_t)w * h);
++  if (a->cells == NULL)
++    fail("mémoire insuffisante pour %s", a->path);
++
++  uint8_t tile[TILE_PIXELS];
++  for (int ty = 0; ty < h; ty++) {
++    for (int tx = 0; tx < w; tx++) {
++      for (int y = 0; y < TILE_SIZE; y++)
++        memcpy(tile + y * TILE_SIZE,
++               img->pixels + (size_t)(ty * TILE_SIZE + y) * img->width +
++                   tx * TILE_SIZE,
++               TILE_SIZE);
++      a->cells[ty * w + tx] = (uint8_t)findOrAddTile(tile, a->path);
++    }
++  }
++}
++
++/* ---- Écriture ------------------------------------------------------------ */
++
++static void writeBytes(FILE *f, const uint8_t *p, size_t n) {
++  for (size_t i = 0; i < n; i++) {
++    if (i % 16 == 0)
++      fprintf(f, "\n   ");
++    fprintf(f, " 0x%02X,", p[i]);
++  }
++  fprintf(f, "\n");
++}
++
++static void writeOutput(const char *base, const char *manifest) {
++  char path[MAX_PATH];
++  const char *guard = "AMB96_ASSETS_H";
++
++  /* En-tête */
++  snprintf(path, sizeof path, "%s.h", base);
++  FILE *h = fopen(path, "w");
++  if (h == NULL)
++    fail("impossible de créer %s", path);
++  fprintf(h, "/* Généré par bmp2c depuis %s : ne pas modifier. */\n\n",
++          manifest);
++  fprintf(h, "#ifndef %s\n#define %s\n\n#include \"assets_types.h\"\n\n",
++          guard, guard);
++  fprintf(h, "extern const uint16_t asset_palette[PALETTE_COLORS];\n");
++  fprintf(h, "extern const Tileset asset_tiles;\n\n");
++  for (int i = 0; i < assetCount; i++)
++    fprintf(h, "extern const %s asset_%s;\n",
++            assets[i].kind == KIND_PLANE ? "Tilemap" : "Sprite",
++            assets[i].name);
++  fprintf(h, "\n#endif\n");
++  fclose(h);
++
++  /* Données */
++  snprintf(path, sizeof path, "%s.c", base);
++  FILE *c = fopen(path, "w");
++  if (c == NULL)
++    fail("impossible de créer %s", path);
++
++  const char *slash = strrchr(base, '/');
++  fprintf(c, "/* Généré par bmp2c depuis %s : ne pas modifier. */\n\n",
++          manifest);
++  fprintf(c, "#include \"%s.h\"\n\n", slash ? slash + 1 : base);
++
++  /* Palette : RGB 8 bits -> 0bbbbbgggggrrrrr */
++  const Image *ref = &assets[0].image;
++  fprintf(c, "const uint16_t asset_palette[PALETTE_COLORS] = {");
++  for (int i = 0; i < 256; i++) {
++    unsigned r = ref->rgb[i][0] >> 3, g = ref->rgb[i][1] >> 3,
++             b = ref->rgb[i][2] >> 3;
++    if (i % 8 == 0)
++      fprintf(c, "\n   ");
++    fprintf(c, " 0x%04X,", r | (g << 5) | (b << 10));
++  }
++  fprintf(c, "\n};\n\n");
++
++  /* Tiles (alignées sur 4 octets, pour des copies par mots longs) */
++  if (tileCount > 0) {
++    fprintf(c, "static const uint8_t tilePixels[%d * TILE_PIXELS]\n"
++               "    __attribute__((aligned(4))) = {",
++            tileCount);
++    for (int i = 0; i < tileCount; i++) {
++      fprintf(c, "\n    /* tile %d */", i);
++      writeBytes(c, tiles[i], TILE_PIXELS);
++    }
++    fprintf(c, "};\n\nconst Tileset asset_tiles = {%d, tilePixels};\n\n",
++            tileCount);
++  } else {
++    fprintf(c, "const Tileset asset_tiles = {0, 0};\n\n");
++  }
++
++  for (int i = 0; i < assetCount; i++) {
++    const Asset *a = &assets[i];
++    if (a->kind == KIND_PLANE) {
++      int w = a->image.width / TILE_SIZE, hh = a->image.height / TILE_SIZE;
++      fprintf(c, "/* %s */\nstatic const uint8_t %s_cells[%d * %d] = {",
++              a->path, a->name, w, hh);
++      writeBytes(c, a->cells, (size_t)w * hh);
++      fprintf(c, "};\n\nconst Tilemap asset_%s = {%d, %d, %s_cells};\n\n",
++              a->name, w, hh, a->name);
++    } else {
++      int w = a->image.width, hh = a->image.height;
++      fprintf(c,
++              "/* %s */\nstatic const uint8_t %s_pixels[%d * %d]\n"
++              "    __attribute__((aligned(4))) = {",
++              a->path, a->name, w, hh);
++      writeBytes(c, a->image.pixels, (size_t)w * hh);
++      fprintf(c, "};\n\nconst Sprite asset_%s = {%d, %d, %s_pixels};\n\n",
++              a->name, w, hh, a->name);
++    }
++  }
++  fclose(c);
++}
++
++int main(int argc, char *argv[]) {
++  if (argc != 3) {
++    fprintf(stderr, "usage : bmp2c MANIFESTE SORTIE  (produit SORTIE.h et "
++                    "SORTIE.c)\n");
++    return 1;
++  }
++
++  readManifest(argv[1]);
++
++  for (int i = 0; i < assetCount; i++) {
++    loadBMP(assets[i].path, &assets[i].image);
++    checkPalette(&assets[i], &assets[0].image);
++    if (assets[i].kind == KIND_PLANE)
++      cutPlane(&assets[i]);
++  }
++
++  writeOutput(argv[2], argv[1]);
++
++  fprintf(stderr, "bmp2c : %d images, %d tiles -> %s.c / %s.h\n", assetCount,
++          tileCount, argv[2], argv[2]);
++  return 0;
++}

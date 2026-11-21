@@ -35,6 +35,9 @@ void slave_vint(void) {
   slaveVInts++;
 }
 
+/* Cette démo n'a pas de programme 68000 */
+void md_vint(void) {}
+
 /* ---- Master ------------------------------------------------------------ */
 
 void master_main(void) {

@@ -1,4 +1,4 @@
-.PHONY: all clean rebuild
+.PHONY: all clean rebuild run amb96
 
 all:
 	cmake -S . -B build
@@ -11,3 +11,6 @@ rebuild: clean all
 
 run: all
 	./build/pixel
+
+amb96: all
+	./build/amb96

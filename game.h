@@ -16,4 +16,11 @@ void slave_main(void);
 void master_vint(void);
 void slave_vint(void);
 
+/* Routine V_INT du 68000 (le programme Mega Drive de la cartouche).
+   Le 68000 n'est pas émulé : la plate-forme appelle cette fonction au
+   début de chaque VBlank, depuis la synchro vidéo. Elle doit être très
+   courte (lire la manette, écrire les registres COMM) et ne toucher ni
+   au frame buffer ni à la palette 32X, réservés aux SH2. */
+void md_vint(void);
+
 #endif

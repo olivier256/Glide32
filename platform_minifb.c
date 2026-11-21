@@ -218,6 +218,43 @@ int main(int argc, char *argv[]) {
 
 int platform_running(void) { return _running; }
 
+/* ==== Manette =============================================================
+   Clavier -> manette Mega Drive. MiniFB repère les touches par leur
+   position physique (disposition US) : J, K, L tombent au même endroit
+   en AZERTY et en QWERTY.
+     Flèches = croix, J = A, K = B, L = C, Entrée = Start.
+   Lu depuis la synchro vidéo ; le tampon de MiniFB est écrit par le
+   thread principal : une touche peut arriver avec une image de retard. */
+
+unsigned platform_read_pad(void) {
+  struct mfb_window *window = _window;
+  if (window == NULL)
+    return 0;
+
+  const uint8_t *keys = mfb_get_key_buffer(window);
+  if (keys == NULL)
+    return 0;
+
+  unsigned pad = 0;
+  if (keys[MFB_KB_KEY_UP])
+    pad |= PAD_UP;
+  if (keys[MFB_KB_KEY_DOWN])
+    pad |= PAD_DOWN;
+  if (keys[MFB_KB_KEY_LEFT])
+    pad |= PAD_LEFT;
+  if (keys[MFB_KB_KEY_RIGHT])
+    pad |= PAD_RIGHT;
+  if (keys[MFB_KB_KEY_J])
+    pad |= PAD_A;
+  if (keys[MFB_KB_KEY_K])
+    pad |= PAD_B;
+  if (keys[MFB_KB_KEY_L])
+    pad |= PAD_C;
+  if (keys[MFB_KB_KEY_ENTER])
+    pad |= PAD_START;
+  return pad;
+}
+
 int platform_cpu_id(void) { return _cpuId; }
 
 /* Apple Silicon réordonne les écritures entre cœurs : barrière complète */
@@ -397,6 +434,7 @@ static void beginLine(int line, int64_t startNs) {
     _vblankStartNs = startNs;
     vdp_begin_vblank();
     interface_raise_vint(); /* le VDP signale le VBlank à l'IC4 */
+    md_vint();              /* VBlank Mega Drive : le 68000 */
     publishFrame();
   }
 }

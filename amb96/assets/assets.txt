@@ -1,0 +1,12 @@
+# Images converties par tools/bmp2c (voir l'en-tête de bmp2c.c).
+# type    nom         fichier
+# La palette est celle de la première image.
+
+plane     plane_a     plane_a.bmp
+plane     plane_b     plane_b.bmp
+
+sprite    sonic       sonic.bmp
+sprite    corner_tl   corner_tl.bmp
+sprite    corner_tr   corner_tr.bmp
+sprite    corner_bl   corner_bl.bmp
+sprite    corner_br   corner_br.bmp
