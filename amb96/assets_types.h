@@ -10,12 +10,19 @@
    du VDP 32X). L'index 0 est transparent pour les sprites.
    ========================================================================= */
 
-/* Les tiles sont carrées, de 8 x 8 pixels (comme sur le VDP Mega Drive).
+/* Les tiles sont carrées, de 16 x 16 pixels : une ligne de tile fait
+   16 octets, soit exactement une ligne du cache du SH2. Chaque chargement
+   de cache sert donc entièrement à la ligne d'écran en cours, quel que
+   soit le CPU qui la dessine (avec des tiles 8 x 8, une ligne de cache
+   contiendrait deux lignes de tile, dont l'une dessinée par l'autre CPU).
+   Les tiles doivent pour cela commencer à une adresse multiple de 16
+   (TILE_ALIGN), en SDRAM comme dans les données générées.
    C'est la seule constante à changer pour une autre taille (puissance de
    2) : bmp2c et le moteur la lisent tous deux ici. */
-#define TILE_SHIFT 3
+#define TILE_SHIFT 4
 #define TILE_SIZE (1 << TILE_SHIFT)
 #define TILE_PIXELS (TILE_SIZE * TILE_SIZE)
+#define TILE_ALIGN 16 /* taille d'une ligne du cache SH2 */
 
 /* Jeu de tiles partagé par les plans : 'count' tiles de TILE_PIXELS
    octets, rangées ligne par ligne. */

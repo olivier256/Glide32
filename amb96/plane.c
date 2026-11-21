@@ -3,8 +3,8 @@
 
 /* La ligne est construite morceau par morceau : la fin de la première
    tile (à partir de la colonne scrollX), les tiles entières, puis le
-   début de la dernière (avec des tiles de 8 pixels : 40 ou 41 morceaux
-   par ligne). Les dimensions du plan étant des puissances de 2,
+   début de la dernière (avec des tiles de 16 pixels : 20 ou 21
+   morceaux par ligne). Les dimensions du plan étant des puissances de 2,
    le bouclage n'est qu'un masque.
 
    Chaque morceau est copié par fb_copy, comme par un memcpy ordinaire :

@@ -41,12 +41,15 @@ sprite    sonic       sonic.bmp
 ```
 
 - **Plan** : l'image entière du niveau. bmp2c la découpe en tiles de
-  8 × 8, ne garde qu'un exemplaire des tiles identiques, et fait un seul
+  16 × 16, ne garde qu'un exemplaire des tiles identiques, et fait un seul
   jeu de tiles pour tous les plans (65 535 tiles au plus, numéros sur
   16 bits). Le nombre de tiles en largeur et en hauteur doit être une
   puissance de 2 : les plans actuels font 1024 × 1024 pixels, soit
-  128 × 128 tiles, et partagent 198 tiles. La taille des tiles se règle
+  64 × 64 tiles, et partagent 90 tiles. La taille des tiles se règle
   par `TILE_SHIFT` dans `assets_types.h`, lu par bmp2c et par le moteur.
+  Pourquoi 16 × 16 : une ligne de tile fait alors 16 octets, une ligne du
+  cache SH2 ; chaque chargement de cache sert en entier à la ligne d'écran
+  dessinée, alors qu'en 8 × 8 la moitié servirait à l'autre CPU.
 - **Sprite** : l'image telle quelle. L'index 0 est transparent.
 - **Palette** : celle de la première image du manifeste. bmp2c refuse une
   image qui donne une autre couleur à un index qu'elle utilise.
@@ -118,7 +121,7 @@ transparents.
   défilements verticaux.
 - Le fondu de palette (`palFader`) et le benchmark par H_INT ne sont pas
   encore portés.
-- Tiles de 8 × 8 au lieu de 32 × 32, numérotées sur 16 bits à partir
+- Tiles de 16 × 16 au lieu de 32 × 32, numérotées sur 16 bits à partir
   de 0 (l'original commençait à $80, qui correspondait à l'adresse
   $06020000).
 - La couleur 255 n'a plus son bit de priorité ($FC00 → $7C00) : un BMP

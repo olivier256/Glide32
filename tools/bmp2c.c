@@ -13,7 +13,7 @@
    variable 'asset_<nom>' (Tilemap pour un plan, Sprite pour un sprite).
 
    - Plan : l'image entière du niveau. Elle est découpée en tiles de
-     TILE_SIZE x TILE_SIZE pixels (8 x 8, voir amb96/assets_types.h) ; les
+     TILE_SIZE x TILE_SIZE pixels (16 x 16, voir amb96/assets_types.h) ; les
      tiles identiques ne sont gardées qu'une fois, et tous les plans
      partagent le même jeu de tiles (asset_tiles, 65 535 au plus).
      Ses dimensions en tiles doivent être des puissances de 2.
@@ -355,10 +355,11 @@ static void writeOutput(const char *base, const char *manifest) {
   }
   fprintf(c, "\n};\n\n");
 
-  /* Tiles (alignées sur 4 octets, pour des copies par mots longs) */
+  /* Tiles alignées sur TILE_ALIGN (une ligne de cache SH2) : comme chaque
+     tile fait TILE_PIXELS octets, multiple de 16, toutes le sont. */
   if (tileCount > 0) {
     fprintf(c, "static const uint8_t tilePixels[%d * TILE_PIXELS]\n"
-               "    __attribute__((aligned(4))) = {",
+               "    __attribute__((aligned(TILE_ALIGN))) = {",
             tileCount);
     for (int i = 0; i < tileCount; i++) {
       fprintf(c, "\n    /* tile %d */", i);

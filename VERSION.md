@@ -1,3 +1,16 @@
+Tiles 16x16 alignées sur le cache SH2
+
+- TILE_SHIFT = 4 : une ligne de tile = 16 octets = une ligne du cache
+  SH2. Chaque chargement de cache sert en entier à la ligne d'écran
+  dessinée, quel que soit le CPU (en 8x8, la moitié servait à l'autre).
+- bmp2c aligne le jeu de tiles sur 16 octets (TILE_ALIGN).
+- Plans : 90 tiles, 64x64 tiles par plan.
+- Simulateur : md_vint() écrit la manette avant l'échange de frame
+  buffer (un appui d'une image n'est plus pris en compte en retard).
+- VERSION.md : section « Tiles 16 × 16 ».
+
+---
+
 On ajoute les compteurs.
 Lancer avec
 ```
@@ -6,7 +19,7 @@ VDP_STATS=1 make amb96
 VDP_STATS=1 ./build/amb96
 ```
 
-
+---
 
 **Ce qui a changé**
 - **Une seule constante.** La taille des tiles est fixée par `TILE_SHIFT` dans `assets_types.h`, que lisent à la fois bmp2c et le moteur. Changer la taille ne demande plus de modifier deux endroits.

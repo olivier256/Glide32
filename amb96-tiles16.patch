@@ -1,0 +1,132 @@
+diff --git a/amb96/README.md b/amb96/README.md
+index 3efcaf8..2673e17 100644
+--- a/amb96/README.md
++++ b/amb96/README.md
+@@ -41,12 +41,15 @@ sprite    sonic       sonic.bmp
+ ```
+ 
+ - **Plan** : l'image entière du niveau. bmp2c la découpe en tiles de
+-  8 × 8, ne garde qu'un exemplaire des tiles identiques, et fait un seul
++  16 × 16, ne garde qu'un exemplaire des tiles identiques, et fait un seul
+   jeu de tiles pour tous les plans (65 535 tiles au plus, numéros sur
+   16 bits). Le nombre de tiles en largeur et en hauteur doit être une
+   puissance de 2 : les plans actuels font 1024 × 1024 pixels, soit
+-  128 × 128 tiles, et partagent 198 tiles. La taille des tiles se règle
++  64 × 64 tiles, et partagent 90 tiles. La taille des tiles se règle
+   par `TILE_SHIFT` dans `assets_types.h`, lu par bmp2c et par le moteur.
++  Pourquoi 16 × 16 : une ligne de tile fait alors 16 octets, une ligne du
++  cache SH2 ; chaque chargement de cache sert en entier à la ligne d'écran
++  dessinée, alors qu'en 8 × 8 la moitié servirait à l'autre CPU.
+ - **Sprite** : l'image telle quelle. L'index 0 est transparent.
+ - **Palette** : celle de la première image du manifeste. bmp2c refuse une
+   image qui donne une autre couleur à un index qu'elle utilise.
+@@ -118,7 +121,7 @@ transparents.
+   défilements verticaux.
+ - Le fondu de palette (`palFader`) et le benchmark par H_INT ne sont pas
+   encore portés.
+-- Tiles de 8 × 8 au lieu de 32 × 32, numérotées sur 16 bits à partir
++- Tiles de 16 × 16 au lieu de 32 × 32, numérotées sur 16 bits à partir
+   de 0 (l'original commençait à $80, qui correspondait à l'adresse
+   $06020000).
+ - La couleur 255 n'a plus son bit de priorité ($FC00 → $7C00) : un BMP
+diff --git a/amb96/assets_types.h b/amb96/assets_types.h
+index a2263a7..44a9794 100644
+--- a/amb96/assets_types.h
++++ b/amb96/assets_types.h
+@@ -10,12 +10,19 @@
+    du VDP 32X). L'index 0 est transparent pour les sprites.
+    ========================================================================= */
+ 
+-/* Les tiles sont carrées, de 8 x 8 pixels (comme sur le VDP Mega Drive).
++/* Les tiles sont carrées, de 16 x 16 pixels : une ligne de tile fait
++   16 octets, soit exactement une ligne du cache du SH2. Chaque chargement
++   de cache sert donc entièrement à la ligne d'écran en cours, quel que
++   soit le CPU qui la dessine (avec des tiles 8 x 8, une ligne de cache
++   contiendrait deux lignes de tile, dont l'une dessinée par l'autre CPU).
++   Les tiles doivent pour cela commencer à une adresse multiple de 16
++   (TILE_ALIGN), en SDRAM comme dans les données générées.
+    C'est la seule constante à changer pour une autre taille (puissance de
+    2) : bmp2c et le moteur la lisent tous deux ici. */
+-#define TILE_SHIFT 3
++#define TILE_SHIFT 4
+ #define TILE_SIZE (1 << TILE_SHIFT)
+ #define TILE_PIXELS (TILE_SIZE * TILE_SIZE)
++#define TILE_ALIGN 16 /* taille d'une ligne du cache SH2 */
+ 
+ /* Jeu de tiles partagé par les plans : 'count' tiles de TILE_PIXELS
+    octets, rangées ligne par ligne. */
+diff --git a/amb96/plane.c b/amb96/plane.c
+index 19f8b7e..014a29a 100644
+--- a/amb96/plane.c
++++ b/amb96/plane.c
+@@ -3,8 +3,8 @@
+ 
+ /* La ligne est construite morceau par morceau : la fin de la première
+    tile (à partir de la colonne scrollX), les tiles entières, puis le
+-   début de la dernière (avec des tiles de 8 pixels : 40 ou 41 morceaux
+-   par ligne). Les dimensions du plan étant des puissances de 2,
++   début de la dernière (avec des tiles de 16 pixels : 20 ou 21
++   morceaux par ligne). Les dimensions du plan étant des puissances de 2,
+    le bouclage n'est qu'un masque.
+ 
+    Chaque morceau est copié par fb_copy, comme par un memcpy ordinaire :
+diff --git a/platform_headless.c b/platform_headless.c
+index 7107205..4834071 100644
+--- a/platform_headless.c
++++ b/platform_headless.c
+@@ -177,9 +177,9 @@ static void runVideo(void) {
+           }
+ 
+         _vblankStartNs = start;
++        md_vint(); /* avant l'échange : voir platform_minifb.c */
+         vdp_begin_vblank();
+         interface_raise_vint();
+-        md_vint();
+       }
+     }
+   }
+diff --git a/platform_minifb.c b/platform_minifb.c
+index 62dd5ea..c14a52b 100644
+--- a/platform_minifb.c
++++ b/platform_minifb.c
+@@ -432,9 +432,12 @@ static void beginLine(int line, int64_t startNs) {
+   } else if (line == _displayLines) {
+     /* Début du VBlank : l'image affichée est complète */
+     _vblankStartNs = startNs;
++    /* VBlank Mega Drive : le 68000 d'abord, pour que ce qu'il écrit
++       (manette) soit en place avant que les SH2 voient l'échange de
++       frame buffer et commencent l'image suivante. */
++    md_vint();
+     vdp_begin_vblank();
+     interface_raise_vint(); /* le VDP signale le VBlank à l'IC4 */
+-    md_vint();              /* VBlank Mega Drive : le 68000 */
+     publishFrame();
+   }
+ }
+diff --git a/tools/bmp2c.c b/tools/bmp2c.c
+index 91daad7..da2d49e 100644
+--- a/tools/bmp2c.c
++++ b/tools/bmp2c.c
+@@ -13,7 +13,7 @@
+    variable 'asset_<nom>' (Tilemap pour un plan, Sprite pour un sprite).
+ 
+    - Plan : l'image entière du niveau. Elle est découpée en tiles de
+-     TILE_SIZE x TILE_SIZE pixels (8 x 8, voir amb96/assets_types.h) ; les
++     TILE_SIZE x TILE_SIZE pixels (16 x 16, voir amb96/assets_types.h) ; les
+      tiles identiques ne sont gardées qu'une fois, et tous les plans
+      partagent le même jeu de tiles (asset_tiles, 65 535 au plus).
+      Ses dimensions en tiles doivent être des puissances de 2.
+@@ -355,10 +355,11 @@ static void writeOutput(const char *base, const char *manifest) {
+   }
+   fprintf(c, "\n};\n\n");
+ 
+-  /* Tiles (alignées sur 4 octets, pour des copies par mots longs) */
++  /* Tiles alignées sur TILE_ALIGN (une ligne de cache SH2) : comme chaque
++     tile fait TILE_PIXELS octets, multiple de 16, toutes le sont. */
+   if (tileCount > 0) {
+     fprintf(c, "static const uint8_t tilePixels[%d * TILE_PIXELS]\n"
+-               "    __attribute__((aligned(4))) = {",
++               "    __attribute__((aligned(TILE_ALIGN))) = {",
+             tileCount);
+     for (int i = 0; i < tileCount; i++) {
+       fprintf(c, "\n    /* tile %d */", i);

@@ -177,9 +177,9 @@ static void runVideo(void) {
           }
 
         _vblankStartNs = start;
+        md_vint(); /* avant l'échange : voir platform_minifb.c */
         vdp_begin_vblank();
         interface_raise_vint();
-        md_vint();
       }
     }
   }

@@ -432,9 +432,12 @@ static void beginLine(int line, int64_t startNs) {
   } else if (line == _displayLines) {
     /* Début du VBlank : l'image affichée est complète */
     _vblankStartNs = startNs;
+    /* VBlank Mega Drive : le 68000 d'abord, pour que ce qu'il écrit
+       (manette) soit en place avant que les SH2 voient l'échange de
+       frame buffer et commencent l'image suivante. */
+    md_vint();
     vdp_begin_vblank();
     interface_raise_vint(); /* le VDP signale le VBlank à l'IC4 */
-    md_vint();              /* VBlank Mega Drive : le 68000 */
     publishFrame();
   }
 }
