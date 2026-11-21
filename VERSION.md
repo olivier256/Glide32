@@ -63,3 +63,18 @@ Routines assembleur SH2 en option
 - mesurer sur émulateur 32X la version C contre la version assembleur (compteur de lignes par H_INT) ;
 - version finale du fond en `MOV.L` alignés et décalages ;
 - sprites : ne pas écrire les mots entièrement transparents.
+
+---
+
+Sprites : les mots transparents ne sont pas écrits
+
+**Ce que fait cette version** :
+- `sprite_copy_row` (ex-`copyRow`, désormais visible dans `sprite.h`) n'écrit plus un mot dont les deux pixels sont transparents, ni un pixel seul transparent : la zone overwrite l'aurait ignoré, mais l'accès au bus aurait eu lieu. Les données des sprites ne changent pas ;
+- sprites : environ 3 410 accès au bus par image au lieu de 8 704 ;
+- `amb96/sh2/sprite_copy_row.S` : version assembleur, en option (`AMB96_ASM`), avec la boucle proposée par Olivier pour une source paire : test du mot avec le `DT` dans le délai du `BT/S`, lecture du mot suivant dans le délai du `BF/S` (le pointeur source est corrigé après la boucle). Source impaire : deux `MOV.B` assemblés, sans `EXTU.B` sur le pixel de gauche (les bits parasites n'apparaissent que si le mot n'est pas transparent) ;
+- `tools/sh2test` compare aussi `sprite_copy_row` C et assembleur : 624 384 copies (toutes longueurs, colonnes de départ et parités), aucune différence ; deux erreurs volontaires détectées. Les zones de destination sont pré-remplies, pour voir aussi les écritures en trop ou manquantes ;
+- vérifié : images identiques au pixel près au rendu de référence, et `sprite_draw` testée sur 116 250 positions.
+
+**Ce qui reste pour plus tard** :
+- un vrai portage 32X (compilation `sh-elf-gcc`, écritures directes, recopie des données en SDRAM) et la mesure sur émulateur, C contre assembleur ;
+- version finale du fond en `MOV.L` alignés et décalages.

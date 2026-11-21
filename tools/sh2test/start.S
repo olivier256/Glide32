@@ -27,3 +27,11 @@ SYMBOL(sys_write):
         trapa   #0x13
         rts
         nop
+
+/* sprite.c contient aussi sprite_draw, qui divise (fonction d'aide de
+   libgcc). Le banc ne l'appelle pas, et la libgcc de cette chaîne est
+   petit-boutiste : une souche suffit pour l'édition de liens. */
+        .global SYMBOL(__sdivsi3_i4i)
+SYMBOL(__sdivsi3_i4i):
+        rts
+        mov     #0, r0

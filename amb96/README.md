@@ -77,16 +77,18 @@ le défilement :
 
 | Défilement X des plans | Fond, accès bus      | Sprites, accès bus |
 |------------------------|----------------------|--------------------|
-| pair                   | 35 840 (16 bits)     | 8 704 (16 bits)    |
-| impair                 | 35 840 (16 bits)     | 8 704              |
+| pair                   | 35 840 (16 bits)     | ≈ 3 410            |
+| impair                 | 35 840 (16 bits)     | ≈ 3 410            |
 
 Avec la copie précédente (comme un memcpy ordinaire), un défilement
 impair coûtait 71 680 accès : tout partait octet par octet.
 `plane.c` explique les deux boucles (paire : un mot lu, un mot écrit ;
 impaire : deux octets lus, assemblés en un mot écrit).
 
-Les sprites sont écrits sur tout leur rectangle, y compris les pixels
-transparents.
+Les sprites sont parcourus sur tout leur rectangle, mais un mot dont les
+deux pixels sont transparents n'est pas écrit : environ 3 410 accès au
+lieu de 8 704. Le chiffre varie un peu avec la position (un pixel seul en
+début ou en fin de ligne à une colonne impaire demande une écriture 8 bits).
 
 ## Routines assembleur SH2 (option)
 
@@ -96,8 +98,13 @@ obligation : le C reste la référence et n'est pas écrit en fonction de
 l'assembleur. Une routine `.S` reprend exactement l'interface C (même
 nom, mêmes paramètres, mêmes structures).
 
-Aujourd'hui : `plane_draw_line` (`amb96/sh2/plane_draw_line.S`), avec
-`DT` et le délai de branchement dans les boucles internes.
+Aujourd'hui :
+- `plane_draw_line` (`amb96/sh2/plane_draw_line.S`), avec `DT` et le
+  délai de branchement dans les boucles internes ;
+- `sprite_copy_row` (`amb96/sh2/sprite_copy_row.S`) : test du mot
+  transparent avec le `DT` dans le délai du `BT/S`, et lecture du mot
+  suivant dans le délai du `BF/S` de la boucle ; écriture par adressage
+  indexé `@(R0,R5)`, R0 gardant l'écart destination - source.
 
 - **Activation** : option CMake `AMB96_ASM` (ou `-DAMB96_ASM` à la
   compilation). Elle ne sert que pour une compilation SH2 ; sur le Mac, le
@@ -108,8 +115,9 @@ Aujourd'hui : `plane_draw_line` (`amb96/sh2/plane_draw_line.S`), avec
   s'assembler si `TILE_SHIFT` n'est plus celui qu'il suppose.
 - **Vérification** : `tools/sh2test/run.sh` compile la version C et la
   version assembleur pour SH gros-boutiste dans le même programme, les
-  lance sous `qemu-sh4eb` et compare leurs lignes pour toutes les valeurs
-  de défilement X. L'assembleur est contrôlé en SH2 strict
+  lance sous `qemu-sh4eb` et compare leurs résultats : toutes les valeurs
+  de défilement X pour le fond ; toutes les longueurs, colonnes de départ
+  et parités pour les sprites. L'assembleur est contrôlé en SH2 strict
   (`--isa=sh2`). Il faut Linux (qemu en mode utilisateur n'existe pas sous
   macOS : VM ou Docker) et `apt install gcc-sh4-linux-gnu qemu-user`.
 

@@ -70,7 +70,7 @@ if(AMB96_ASM)
 			"l'assembleur contre le C, sous Linux : tools/sh2test/run.sh")
 	endif()
 	enable_language(ASM)
-	list(APPEND AMB96_SOURCES amb96/sh2/plane_draw_line.S)
+	list(APPEND AMB96_SOURCES amb96/sh2/plane_draw_line.S amb96/sh2/sprite_copy_row.S)
 	add_compile_definitions(AMB96_ASM)
 endif()
 
