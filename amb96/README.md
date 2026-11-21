@@ -72,14 +72,18 @@ par CPU, par taille et par zone, image par image. Une écriture 8 ou
 - Sans fenêtre : à chaque `--shot` et à la fin.
 
 Repère : redessiner l'écran entier en écritures 16 bits demande
-35 840 accès (320 × 224 / 2). Mesures avec la copie de référence
-(`fb_copy`, qui copie comme un memcpy ordinaire) :
+35 840 accès (320 × 224 / 2). C'est ce que fait le fond, quel que soit
+le défilement :
 
-| Défilement X des plans | Fond, accès bus | Sprites, accès bus |
-|------------------------|-----------------|--------------------|
-| multiple de 4          | 35 840 (32 bits) | 8 704 (16 bits)   |
-| pair                   | 35 840 (16 bits) | 8 704             |
-| impair                 | **71 680 (8 bits)** | 8 704          |
+| Défilement X des plans | Fond, accès bus      | Sprites, accès bus |
+|------------------------|----------------------|--------------------|
+| pair                   | 35 840 (16 bits)     | 8 704 (16 bits)    |
+| impair                 | 35 840 (16 bits)     | 8 704              |
+
+Avec la copie précédente (comme un memcpy ordinaire), un défilement
+impair coûtait 71 680 accès : tout partait octet par octet.
+`plane.c` explique les deux boucles (paire : un mot lu, un mot écrit ;
+impaire : deux octets lus, assemblés en un mot écrit).
 
 Les sprites sont écrits sur tout leur rectangle, y compris les pixels
 transparents.

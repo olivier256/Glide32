@@ -32,15 +32,6 @@ static inline uint32_t fb_offset(int x, int y) {
   return (uint32_t)(FB_LINE_TABLE_BYTES + y * FB_WIDTH + x);
 }
 
-/* Copie n octets de src dans le frame buffer de dessin, à partir de
-   l'offset 'offset' (zone normale), comme le ferait un memcpy ordinaire :
-   - par mots de 32 bits si source et destination ont le même alignement
-     modulo 4,
-   - sinon par mots de 16 bits si elles ont la même parité,
-   - sinon octet par octet.
-   C'est la copie de référence, à battre. */
-void fb_copy(uint32_t offset, const uint8_t *src, int n);
-
 /* Ce qu'un CPU dessine pendant une image : les lignes firstLine,
    firstLine + lineStep, firstLine + 2 * lineStep...
    Avec deux CPU : lineStep = 2, firstLine = 0 (Master) ou 1 (Slave).
