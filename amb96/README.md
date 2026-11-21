@@ -62,7 +62,7 @@ nom `asset_<nom>` (déclaré dans `amb96_assets.h`, généré).
 | `md68k.c`         | programme 68000 : manette → registre COMM                  |
 | `shared.h`        | registres COMM utilisés, scène partagée, accès sans cache  |
 | `plane.c`         | dessin d'une ligne de plan de tiles                        |
-| `sprite.c`        | dessin d'un sprite (découpage aux bords, transparence)     |
+| `sprite.c`        | dessin d'un sprite (découpage aux bords, zone overwrite)   |
 | `framebuffer.c`   | table de lignes et accès au frame buffer de dessin         |
 | `assets_types.h`  | types `Tileset`, `Tilemap`, `Sprite`                       |
 | `../tools/bmp2c.c`| convertisseur BMP → C                                      |
@@ -104,11 +104,14 @@ console :
 
 - `SHARED()` dans `shared.h` donne déjà l'adresse cache-through sur SH2
   (non testé sur matériel).
-- Les sprites pourraient utiliser la zone overwrite du frame buffer
-  (DRAM + 20000h), où un octet nul n'est pas écrit : le matériel ferait la
-  transparence. Le simulateur ne l'émule pas encore.
-- `memcpy` dans `plane.c` et la boucle de `sprite.c` sont les premiers
-  candidats à l'optimisation (copies par mots longs, ou les routines
+- Les sprites passent par la zone overwrite du frame buffer
+  (2402 0000h), où un octet nul n'est pas écrit : la transparence est
+  faite par le matériel. Dans le simulateur, `vdp_overwrite_write8/16/32()`
+  tiennent lieu de ces écritures ; sur console, ce seront de simples
+  écritures à l'adresse 2402 0000h + offset. Comme le SH2, le simulateur
+  s'arrête sur un accès 16 ou 32 bits mal aligné.
+- `memcpy` dans `plane.c` et `copyRow()` dans `sprite.c` sont les premiers
+  candidats à l'optimisation (écritures 32 bits, ou les routines
   assembleur d'origine).
 - Le simulateur ne mesure pas le temps SH2 : le budget d'une image
   (environ 23 MHz par CPU) reste à vérifier.

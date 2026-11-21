@@ -1,6 +1,9 @@
 #include "vdp.h"
 #include "platform.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 /* Mémoire */
 static uint16_t vdp_dram0[VDP_DRAM_SIZE / 2];
 static uint16_t vdp_dram1[VDP_DRAM_SIZE / 2];
@@ -79,6 +82,45 @@ static void applyFrameBuffer(void) {
 
   displayFrameBuffer = _activeFS ? vdp_dram1 : vdp_dram0;
   vdp_dram = _activeFS ? vdp_dram0 : vdp_dram1;
+}
+
+/* ---- Zone overwrite ------------------------------------------------------ */
+
+/* Erreur d'adresse du SH2 : sur la console, le CPU part dans sa routine
+   d'exception. Ici, on s'arrête net, avec de quoi retrouver l'accès. */
+static void addressError(const char *access, uint32_t offset) {
+  fprintf(stderr,
+          "VDP : erreur d'adresse, %s en 2402 0000h + %05Xh (CPU %d)\n",
+          access, (unsigned)offset, platform_cpu_id());
+  abort();
+}
+
+/* Écrit un octet dans le frame buffer de dessin, sauf s'il est nul */
+static inline void overwriteByte(uint32_t offset, uint8_t pixel) {
+  if (pixel != 0)
+    ((uint8_t *)vdp_dram)[offset] = pixel;
+}
+
+void vdp_overwrite_write8(uint32_t offset, uint8_t pixel) {
+  if (offset >= VDP_DRAM_SIZE)
+    addressError("ecriture 8 bits", offset);
+  overwriteByte(offset, pixel);
+}
+
+void vdp_overwrite_write16(uint32_t offset, uint16_t pixels) {
+  if ((offset & 1) || offset + 2 > VDP_DRAM_SIZE)
+    addressError("ecriture 16 bits", offset);
+  overwriteByte(offset, (uint8_t)(pixels >> 8));
+  overwriteByte(offset + 1, (uint8_t)pixels);
+}
+
+void vdp_overwrite_write32(uint32_t offset, uint32_t pixels) {
+  if ((offset & 3) || offset + 4 > VDP_DRAM_SIZE)
+    addressError("ecriture 32 bits", offset);
+  overwriteByte(offset, (uint8_t)(pixels >> 24));
+  overwriteByte(offset + 1, (uint8_t)(pixels >> 16));
+  overwriteByte(offset + 2, (uint8_t)(pixels >> 8));
+  overwriteByte(offset + 3, (uint8_t)pixels);
 }
 
 void vdp_get_stats(vdp_stats *stats) {

@@ -6,11 +6,11 @@
 
 /* Dessine les lignes du sprite qui reviennent à ce CPU (voir Screen).
    (x, y) : coin haut-gauche, en pixels d'écran ; le sprite peut déborder,
-   ou être entièrement hors de l'écran. L'index 0 est transparent.
+   ou être entièrement hors de l'écran.
 
-   Sur 32X, la transparence peut être faite par le matériel : écrit dans
-   la zone « overwrite » du frame buffer (DRAM + 20000h), un octet nul est
-   ignoré. Le simulateur ne l'émule pas encore : le test est fait ici. */
+   L'index 0 est transparent, grâce à la zone overwrite du frame buffer
+   (voir vdp.h) : le sprite y est copié tel quel, et le VDP ignore les
+   octets nuls. Aucun test par pixel n'est fait ici. */
 void sprite_draw(const Screen *screen, const Sprite *sprite, int x, int y);
 
 #endif

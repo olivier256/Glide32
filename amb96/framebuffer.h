@@ -27,6 +27,12 @@ static inline uint8_t *fb_pixels(void) {
   return (uint8_t *)vdp_dram + FB_LINE_TABLE_BYTES;
 }
 
+/* Position du pixel (x, y) en octets depuis le début du frame buffer de
+   dessin : c'est l'offset attendu par vdp_overwrite_write*(). */
+static inline uint32_t fb_offset(int x, int y) {
+  return (uint32_t)(FB_LINE_TABLE_BYTES + y * FB_WIDTH + x);
+}
+
 /* Ce qu'un CPU dessine pendant une image : les lignes firstLine,
    firstLine + lineStep, firstLine + 2 * lineStep...
    Avec deux CPU : lineStep = 2, firstLine = 0 (Master) ou 1 (Slave).
