@@ -1,7 +1,11 @@
 #ifndef ASSETS_TYPES_H
 #define ASSETS_TYPES_H
 
+/* Lu aussi par l'assembleur (dossier amb96/sh2) : seules les constantes lui
+   sont visibles, les types C sont réservés au compilateur C. */
+#ifndef __ASSEMBLER__
 #include <stdint.h>
+#endif
 
 /* =========================================================================
    Types des données graphiques, telles que les produit tools/bmp2c.
@@ -28,26 +32,32 @@
    octets, rangées ligne par ligne. */
 #define TILESET_MAX_TILES 65535
 
+#ifndef __ASSEMBLER__
 typedef struct {
   uint16_t count;
   const uint8_t *pixels;
 } Tileset;
+#endif
 
 /* Plan : grille de widthTiles x heightTiles numéros de tile (16 bits),
    ligne par ligne. Les deux dimensions sont des puissances de 2, pour que
    le défilement boucle avec un simple masque. */
+#ifndef __ASSEMBLER__
 typedef struct {
   uint16_t widthTiles;
   uint16_t heightTiles;
   const uint16_t *cells;
 } Tilemap;
+#endif
 
 /* Sprite : width x height pixels, ligne par ligne */
+#ifndef __ASSEMBLER__
 typedef struct {
   uint16_t width;
   uint16_t height;
   const uint8_t *pixels;
 } Sprite;
+#endif
 
 /* Palette : 256 couleurs au format du VDP 32X, 0bbbbbgggggrrrrr
    (le bit 15, priorité, est laissé à 0). */

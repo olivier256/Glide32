@@ -1,6 +1,28 @@
 #include "plane.h"
+#include "asm_abi.h"
 #include "framebuffer.h"
 #include "vdp.h"
+
+#include <stddef.h>
+
+/* ---- Accord avec la version assembleur (amb96/sh2/plane_draw_line.S) ----
+   asm_abi.h décrit pour l'assembleur la position des champs des
+   structures. Si elles changent, ces vérifications arrêtent la compilation.
+   Les positions ne valent que pour SH2 (pointeurs de 32 bits). */
+#define STATIC_CHECK(name, cond) typedef char name[(cond) ? 1 : -1]
+
+STATIC_CHECK(check_line_pixels, FB_LINE_PIXELS == FB_WIDTH);
+#if defined(__sh__)
+STATIC_CHECK(check_width, offsetof(Tilemap, widthTiles) == TILEMAP_WIDTH_TILES);
+STATIC_CHECK(check_height,
+             offsetof(Tilemap, heightTiles) == TILEMAP_HEIGHT_TILES);
+STATIC_CHECK(check_cells, offsetof(Tilemap, cells) == TILEMAP_CELLS);
+STATIC_CHECK(check_pixels, offsetof(Tileset, pixels) == TILESET_PIXELS);
+#endif
+
+/* Avec AMB96_ASM, plane_draw_line est fournie par l'assembleur : la
+   version C ci-dessous reste la référence, mais n'est pas compilée. */
+#ifndef AMB96_ASM
 
 /* =========================================================================
    Dessin d'une ligne de plan.
@@ -135,3 +157,5 @@ void plane_draw_line(uint32_t offset, const Tilemap *map,
   else
     drawLineEven(offset, &pr, x);
 }
+
+#endif /* AMB96_ASM */

@@ -58,6 +58,22 @@ set(AMB96_SOURCES
 	${SIMULATOR_SOURCES}
 )
 
+# Routines assembleur SH2 (amb96/sh2) à la place de leur version C.
+# Option, jamais obligation : le C reste la référence, et le simulateur
+# tourne toujours avec lui. Vérification : tools/sh2test/run.sh
+option(AMB96_ASM "AMB96 : routines assembleur SH2 a la place du C (compilation SH2 uniquement)" OFF)
+if(AMB96_ASM)
+	if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^sh")
+		message(FATAL_ERROR
+			"AMB96_ASM : amb96/sh2 contient du code SH2, qui ne tourne pas sur cette "
+			"machine. Le simulateur utilise toujours la version C. Pour verifier "
+			"l'assembleur contre le C, sous Linux : tools/sh2test/run.sh")
+	endif()
+	enable_language(ASM)
+	list(APPEND AMB96_SOURCES amb96/sh2/plane_draw_line.S)
+	add_compile_definitions(AMB96_ASM)
+endif()
+
 # Avec fenêtre
 add_executable(amb96 ${AMB96_SOURCES} platform_minifb.c)
 target_include_directories(amb96 PRIVATE . amb96 ${CMAKE_CURRENT_BINARY_DIR}/generated)

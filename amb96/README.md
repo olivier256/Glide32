@@ -88,6 +88,31 @@ impaire : deux octets lus, assemblés en un mot écrit).
 Les sprites sont écrits sur tout leur rectangle, y compris les pixels
 transparents.
 
+## Routines assembleur SH2 (option)
+
+Certaines fonctions peuvent être remplacées par une version écrite à la
+main en assembleur SH2, dans `amb96/sh2/`. C'est une option, jamais une
+obligation : le C reste la référence et n'est pas écrit en fonction de
+l'assembleur. Une routine `.S` reprend exactement l'interface C (même
+nom, mêmes paramètres, mêmes structures).
+
+Aujourd'hui : `plane_draw_line` (`amb96/sh2/plane_draw_line.S`), avec
+`DT` et le délai de branchement dans les boucles internes.
+
+- **Activation** : option CMake `AMB96_ASM` (ou `-DAMB96_ASM` à la
+  compilation). Elle ne sert que pour une compilation SH2 ; sur le Mac, le
+  simulateur garde toujours la version C, et CMake refuse l'option.
+- **Accord C / assembleur** : `asm_abi.h` donne à l'assembleur la
+  position des champs des structures et la largeur d'écran ; `plane.c`
+  vérifie à la compilation SH2 qu'elles sont justes. Le `.S` refuse de
+  s'assembler si `TILE_SHIFT` n'est plus celui qu'il suppose.
+- **Vérification** : `tools/sh2test/run.sh` compile la version C et la
+  version assembleur pour SH gros-boutiste dans le même programme, les
+  lance sous `qemu-sh4eb` et compare leurs lignes pour toutes les valeurs
+  de défilement X. L'assembleur est contrôlé en SH2 strict
+  (`--isa=sh2`). Il faut Linux (qemu en mode utilisateur n'existe pas sous
+  macOS : VM ou Docker) et `apt install gcc-sh4-linux-gnu qemu-user`.
+
 ## Organisation du code
 
 | Fichier           | Rôle                                                       |
